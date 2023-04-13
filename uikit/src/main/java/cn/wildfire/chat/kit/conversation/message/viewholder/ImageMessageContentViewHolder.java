@@ -9,8 +9,6 @@ import android.view.View;
 
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.blankj.utilcode.util.FileUtils;
-
 import butterknife.BindView;
 import butterknife.OnClick;
 import cn.wildfire.chat.kit.R2;
@@ -18,12 +16,16 @@ import cn.wildfire.chat.kit.annotation.EnableContextMenu;
 import cn.wildfire.chat.kit.annotation.MessageContentType;
 import cn.wildfire.chat.kit.conversation.ConversationFragment;
 import cn.wildfire.chat.kit.conversation.message.model.UiMessage;
+import cn.wildfire.chat.kit.utils.DownloadManager;
+import cn.wildfire.chat.kit.utils.FileUtils;
 import cn.wildfire.chat.kit.widget.BubbleImageView;
 import cn.wildfirechat.message.ImageMessageContent;
 import cn.wildfirechat.message.Message;
 import cn.wildfirechat.message.MessageContent;
 import cn.wildfirechat.message.core.MessageDirection;
 import cn.wildfirechat.message.core.MessageStatus;
+import cn.wildfirechat.model.Conversation;
+import cn.wildfirechat.remote.ChatManager;
 import cn.wildfirechat.utils.WeChatImageUtils;
 
 /**
@@ -58,12 +60,19 @@ public class ImageMessageContentViewHolder extends MediaMessageContentViewHolder
         } else {
             imagePath = imageMessage.remoteUrl;
         }
+        if (message.message.conversation.type == Conversation.ConversationType.SecretChat){
+            imagePath = DownloadManager.buildSecretChatMediaUrl(message.message);
+        }
         loadMedia(thumbnail, imagePath, imageView);
 
     }
 
     @OnClick(R2.id.imageView)
     void preview() {
+        if (message.message.direction == MessageDirection.Receive && message.message.status != MessageStatus.Played) {
+            message.message.status = MessageStatus.Played;
+            ChatManager.Instance().setMediaMessagePlayed(message.message.messageId);
+        }
         previewMM();
     }
 

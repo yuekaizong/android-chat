@@ -18,7 +18,9 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.lqr.emoji.MoonUtils;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -35,9 +37,11 @@ import cn.wildfire.chat.kit.third.utils.TimeUtils;
 import cn.wildfire.chat.kit.utils.WfcTextUtils;
 import cn.wildfirechat.message.Message;
 import cn.wildfirechat.message.core.MessageDirection;
+import cn.wildfirechat.message.core.MessageStatus;
 import cn.wildfirechat.message.notification.NotificationMessageContent;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.ConversationInfo;
+import cn.wildfirechat.remote.ChatManager;
 
 @SuppressWarnings("unused")
 public abstract class ConversationViewHolder extends RecyclerView.ViewHolder {
@@ -68,13 +72,16 @@ public abstract class ConversationViewHolder extends RecyclerView.ViewHolder {
     @BindView(R2.id.statusImageView)
     protected ImageView statusImageView;
 
+    @BindView(R2.id.secretChatIndicator)
+    protected ImageView secretChatIndicator;
+
     public ConversationViewHolder(Fragment fragment, RecyclerView.Adapter adapter, View itemView) {
         super(itemView);
         this.fragment = fragment;
         this.itemView = itemView;
         this.adapter = adapter;
         ButterKnife.bind(this, itemView);
-        conversationListViewModel = new ViewModelProvider(fragment.getActivity(), new ConversationListViewModelFactory(Arrays.asList(Conversation.ConversationType.Single, Conversation.ConversationType.Group), Arrays.asList(0)))
+        conversationListViewModel = new ViewModelProvider(fragment.getActivity(), new ConversationListViewModelFactory(Arrays.asList(Conversation.ConversationType.Single, Conversation.ConversationType.Group, Conversation.ConversationType.SecretChat), Arrays.asList(0)))
             .get(ConversationListViewModel.class);
         conversationViewModel = ViewModelProviders.of(fragment).get(ConversationViewModel.class);
     }
@@ -92,13 +99,14 @@ public abstract class ConversationViewHolder extends RecyclerView.ViewHolder {
     protected abstract void onBindConversationInfo(ConversationInfo conversationInfo);
 
     public void onBind(ConversationInfo conversationInfo) {
+        secretChatIndicator.setVisibility(View.GONE);
         onBindConversationInfo(conversationInfo);
 
         timeTextView.setText(TimeUtils.getMsgFormatTime(conversationInfo.timestamp));
         silentImageView.setVisibility(conversationInfo.isSilent ? View.VISIBLE : View.GONE);
         statusImageView.setVisibility(View.GONE);
 
-        itemView.setBackgroundResource(conversationInfo.isTop ? R.drawable.selector_stick_top_item : R.drawable.selector_common_item);
+        itemView.setBackgroundResource(conversationInfo.top > 0 ? R.drawable.selector_stick_top_item : R.drawable.selector_common_item);
         redDotView.setVisibility(View.GONE);
         if (conversationInfo.isSilent) {
             if (conversationInfo.unreadCount.unread > 0) { // 显示红点
@@ -188,12 +196,12 @@ public abstract class ConversationViewHolder extends RecyclerView.ViewHolder {
 
     @ConversationContextMenuItem(tag = ConversationContextMenuItemTags.TAG_TOP, priority = 1)
     public void stickConversationTop(View itemView, ConversationInfo conversationInfo) {
-        conversationListViewModel.setConversationTop(conversationInfo, true);
+        conversationListViewModel.setConversationTop(conversationInfo, 1);
     }
 
     @ConversationContextMenuItem(tag = ConversationContextMenuItemTags.TAG_CANCEL_TOP, priority = 2)
     public void cancelStickConversationTop(View itemView, ConversationInfo conversationInfo) {
-        conversationListViewModel.setConversationTop(conversationInfo, false);
+        conversationListViewModel.setConversationTop(conversationInfo, 0);
     }
 
     @ConversationContextMenuItem(tag = ConversationContextMenuItemTags.TAG_MarkAsRead, priority = 3)
@@ -259,20 +267,28 @@ public abstract class ConversationViewHolder extends RecyclerView.ViewHolder {
      */
     public boolean contextMenuItemFilter(ConversationInfo conversationInfo, String itemTag) {
         if (ConversationContextMenuItemTags.TAG_TOP.equals(itemTag)) {
-            return conversationInfo.isTop;
+            return conversationInfo.top > 0;
         }
 
         if (ConversationContextMenuItemTags.TAG_CANCEL_TOP.equals(itemTag)) {
-            return !conversationInfo.isTop;
+            return conversationInfo.top == 0;
         }
 
         if (ConversationContextMenuItemTags.TAG_MarkAsRead.equals(itemTag)) {
-            return conversationInfo.unreadCount.unread == 0;
+            return conversationInfo.unreadCount.unread == 0 && conversationInfo.unreadCount.unreadMention == 0 && conversationInfo.unreadCount.unreadMentionAll == 0;
         }
 
         if (ConversationContextMenuItemTags.TAG_MarkAsUnread.equals(itemTag)) {
-            return conversationInfo.unreadCount.unread > 0;
+            if (conversationInfo.unreadCount.unread > 0 || conversationInfo.unreadCount.unreadMention > 0 || conversationInfo.unreadCount.unreadMentionAll > 0) {
+                return true;
+            }
+            List<Integer> messageStatuses = new ArrayList<>();
+            messageStatuses.add(MessageStatus.Readed.value());
+            messageStatuses.add(MessageStatus.Played.value());
+            List<Message> messages = ChatManager.Instance().getMessagesByMessageStatus(conversationInfo.conversation, messageStatuses, 0, false, 1, "");
+            return messages == null || messages.size() == 0;
         }
+
         return false;
     }
 

@@ -12,6 +12,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.text.Editable;
@@ -19,14 +21,18 @@ import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
+import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -54,6 +60,7 @@ import butterknife.OnTextChanged;
 import cn.wildfire.chat.kit.Config;
 import cn.wildfire.chat.kit.R;
 import cn.wildfire.chat.kit.R2;
+import cn.wildfire.chat.kit.WfcWebViewActivity;
 import cn.wildfire.chat.kit.audio.AudioRecorderPanel;
 import cn.wildfire.chat.kit.audio.PttPanel;
 import cn.wildfire.chat.kit.conversation.ext.core.ConversationExtension;
@@ -65,9 +72,12 @@ import cn.wildfire.chat.kit.viewmodel.MessageViewModel;
 import cn.wildfire.chat.kit.widget.InputAwareLayout;
 import cn.wildfire.chat.kit.widget.KeyboardHeightFrameLayout;
 import cn.wildfire.chat.kit.widget.ViewPagerFixed;
+import cn.wildfirechat.message.ChannelMenuEventMessageContent;
 import cn.wildfirechat.message.Message;
 import cn.wildfirechat.message.TextMessageContent;
 import cn.wildfirechat.message.TypingMessageContent;
+import cn.wildfirechat.model.ChannelInfo;
+import cn.wildfirechat.model.ChannelMenu;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.ConversationInfo;
 import cn.wildfirechat.model.GroupInfo;
@@ -82,6 +92,8 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
     @BindView(R2.id.disableInputTipTextView)
     TextView disableInputTipTextView;
 
+    @BindView(R2.id.menuImageView)
+    ImageView menuImageView;
     @BindView(R2.id.audioImageView)
     ImageView audioImageView;
     @BindView(R2.id.pttImageView)
@@ -96,6 +108,9 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
     ImageView extImageView;
     @BindView(R2.id.sendButton)
     Button sendButton;
+
+    @BindView(R2.id.channelMenuContainerLinearLayout)
+    LinearLayout channelMenuContainerLinearLayout;
 
     @BindView(R2.id.emotionContainerFrameLayout)
     KeyboardHeightFrameLayout emotionContainerFrameLayout;
@@ -166,14 +181,34 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
         this.extension.bind(this.messageViewModel, conversation);
 
         setDraft();
+        if (conversation.type == Conversation.ConversationType.Channel) {
+            showChannelMenu();
+        } else {
+            menuImageView.setVisibility(GONE);
+        }
+
+        SharedPreferences sp = fragment.getContext().getSharedPreferences(Config.SP_CONFIG_FILE_NAME, Context.MODE_PRIVATE);
+        boolean pttEnabled = sp.getBoolean("pttEnabled", true);
+        if (pttEnabled && PTTClient.checkAddress(ChatManager.Instance().getHost()) && conversation.type != Conversation.ConversationType.Channel) {
+            pttImageView.setVisibility(View.VISIBLE);
+            pttPanel = new PttPanel(getContext());
+        }
     }
 
     private QuoteInfo quoteInfo;
 
     public void quoteMessage(Message message) {
         this.quoteInfo = QuoteInfo.initWithMessage(message);
+        if (audioButton.getVisibility() == VISIBLE) {
+            hideAudioButton();
+        }
         refRelativeLayout.setVisibility(VISIBLE);
         refEditText.setText(quoteInfo.getUserDisplayName() + ": " + quoteInfo.getMessageDigest());
+        editText.requestFocus();
+        // FYI: https://stackoverflow.com/questions/5520085/android-show-softkeyboard-with-showsoftinput-is-not-working
+        rootLinearLayout.postDelayed(() -> {
+            rootLinearLayout.showSoftkey(editText);
+        }, 100);
     }
 
     private void clearQuoteMessage() {
@@ -198,6 +233,12 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
 
     public void onDestroy() {
         this.extension.onDestroy();
+        if (audioRecorderPanel != null) {
+            audioRecorderPanel.deattch();
+        }
+        if (pttPanel != null) {
+            pttPanel.deattch();
+        }
     }
 
     public void init(Fragment fragment, InputAwareLayout rootInputAwareLayout) {
@@ -242,12 +283,6 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
                 }
             }
         });
-        SharedPreferences sp = fragment.getContext().getSharedPreferences(Config.SP_CONFIG_FILE_NAME, Context.MODE_PRIVATE);
-        boolean pttEnabled = sp.getBoolean("pttEnabled", true);
-        if (pttEnabled && PTTClient.checkAddress(ChatManager.Instance().getHost())){
-            pttImageView.setVisibility(View.VISIBLE);
-            pttPanel = new PttPanel(getContext());
-        }
 
         // emotion
         emotionLayout.setEmotionSelectedListener(this);
@@ -266,6 +301,13 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
         messageViewModel = ViewModelProviders.of(fragment).get(MessageViewModel.class);
         conversationViewModel = ViewModelProviders.of(fragment).get(ConversationViewModel.class);
 
+        if (conversation != null) {
+            if (conversation.type == Conversation.ConversationType.Channel) {
+                showChannelMenu();
+            } else {
+                menuImageView.setVisibility(GONE);
+            }
+        }
     }
 
     @OnClick(R2.id.extImageView)
@@ -277,7 +319,7 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
             hideConversationExtension();
             rootLinearLayout.showSoftkey(editText);
         } else {
-            emotionImageView.setImageResource(R.mipmap.ic_cheat_emo);
+            emotionImageView.setImageResource(R.mipmap.ic_chat_emo);
             showConversationExtension();
         }
     }
@@ -369,6 +411,71 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
         }
     }
 
+    @OnClick(R2.id.menuImageView)
+    public void showChannelMenu() {
+        ChannelInfo channelInfo = ChatManager.Instance().getChannelInfo(conversation.target, false);
+        if (channelInfo.menus == null || channelInfo.menus.isEmpty()) {
+            Toast.makeText(activity, "频道暂未配置菜单", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (channelMenuContainerLinearLayout.getVisibility() == VISIBLE) {
+            menuImageView.setImageResource(R.mipmap.ic_chat_menu);
+            audioImageView.setVisibility(VISIBLE);
+            extImageView.setVisibility(VISIBLE);
+            emotionImageView.setVisibility(VISIBLE);
+            editText.setVisibility(VISIBLE);
+            channelMenuContainerLinearLayout.removeAllViews();
+            channelMenuContainerLinearLayout.setVisibility(GONE);
+            return;
+        }
+        menuImageView.setImageResource(R.mipmap.ic_chat_keyboard);
+        audioImageView.setVisibility(GONE);
+        extImageView.setVisibility(GONE);
+        emotionImageView.setVisibility(GONE);
+        editText.setVisibility(GONE);
+        rootLinearLayout.hideSoftkey(editText, null);
+        channelMenuContainerLinearLayout.setVisibility(VISIBLE);
+        channelMenuContainerLinearLayout.removeAllViews();
+        if (channelInfo != null && channelInfo.menus != null) {
+            for (ChannelMenu menu : channelInfo.menus) {
+                TextView textView = new TextView(getContext());
+                if (menu.subMenus != null && menu.subMenus.size() > 0) {
+                    textView.setText("≡ " + menu.name);
+                } else {
+                    textView.setText(menu.name);
+                }
+                textView.setGravity(Gravity.CENTER);
+                textView.setBackgroundColor(Color.parseColor("#F8F8F8"));
+                Drawable drawable = getResources().getDrawable(R.drawable.selector_common_item);
+                textView.setBackground(drawable);
+
+                textView.setHeight(ViewGroup.LayoutParams.MATCH_PARENT);
+                textView.setOnClickListener(v -> {
+                    if (menu.subMenus != null && menu.subMenus.size() > 0) {
+                        PopupMenu popupMenu = new PopupMenu(getContext(), textView, Gravity.TOP);
+                        for (ChannelMenu sm : menu.subMenus) {
+                            MenuItem item = popupMenu.getMenu().add(sm.name);
+                            item.setOnMenuItemClickListener(item1 -> {
+                                openChannelMenu(sm);
+                                return true;
+                            });
+
+                        }
+                        popupMenu.show();
+                    } else {
+                        openChannelMenu(menu);
+                    }
+                });
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT, 0);
+                params.leftMargin = 2;
+                params.weight = 1;
+                textView.setLayoutParams(params);
+                channelMenuContainerLinearLayout.addView(textView);
+            }
+        }
+    }
+
     @OnClick({R2.id.audioImageView, R2.id.pttImageView})
     public void showRecordPanel(View view) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -392,6 +499,24 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
             hideEmotionLayout();
             rootLinearLayout.hideSoftkey(editText, null);
             hideConversationExtension();
+        }
+    }
+
+    private void openChannelMenu(ChannelMenu menu) {
+        ChannelMenuEventMessageContent content = new ChannelMenuEventMessageContent();
+        content.setMenu(menu);
+        ChatManager.Instance().sendMessage(conversation, content, null, 0, null);
+
+        switch (menu.type) {
+            case "view":
+                if (!TextUtils.isEmpty(menu.url)) {
+                    WfcWebViewActivity.loadUrl(getContext(), "", menu.url);
+                }
+                break;
+            case "miniprogram":
+                break;
+            default:
+                break;
         }
     }
 
@@ -515,7 +640,7 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
         editText.setVisibility(View.GONE);
         extImageView.setVisibility(VISIBLE);
         sendButton.setVisibility(View.GONE);
-        audioImageView.setImageResource(R.mipmap.ic_cheat_keyboard);
+        audioImageView.setImageResource(R.mipmap.ic_chat_keyboard);
         rootLinearLayout.hideCurrentInput(editText);
         rootLinearLayout.hideAttachedInput(true);
     }
@@ -524,7 +649,7 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
     private void hideAudioButton() {
         audioButton.setVisibility(View.GONE);
         audioRecorderPanel.deattch();
-        if (pttPanel != null){
+        if (pttPanel != null) {
             pttPanel.deattch();
             isPttMode = false;
         }
@@ -536,12 +661,12 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
             extImageView.setVisibility(GONE);
             sendButton.setVisibility(View.VISIBLE);
         }
-        audioImageView.setImageResource(R.mipmap.ic_cheat_voice);
+        audioImageView.setImageResource(R.mipmap.ic_chat_voice);
     }
 
     private void showEmotionLayout() {
         audioButton.setVisibility(View.GONE);
-        emotionImageView.setImageResource(R.mipmap.ic_cheat_keyboard);
+        emotionImageView.setImageResource(R.mipmap.ic_chat_keyboard);
         rootLinearLayout.show(editText, emotionContainerFrameLayout);
         if (onConversationInputPanelStateChangeListener != null) {
             onConversationInputPanelStateChangeListener.onInputPanelExpanded();
@@ -549,7 +674,7 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
     }
 
     private void hideEmotionLayout() {
-        emotionImageView.setImageResource(R.mipmap.ic_cheat_emo);
+        emotionImageView.setImageResource(R.mipmap.ic_chat_emo);
         if (onConversationInputPanelStateChangeListener != null) {
             onConversationInputPanelStateChangeListener.onInputPanelCollapsed();
         }
@@ -573,13 +698,13 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
 
     void closeConversationInputPanel() {
         extension.reset();
-        emotionImageView.setImageResource(R.mipmap.ic_cheat_emo);
+        emotionImageView.setImageResource(R.mipmap.ic_chat_emo);
         rootLinearLayout.hideAttachedInput(true);
         rootLinearLayout.hideCurrentInput(editText);
     }
 
     private void notifyTyping(int type) {
-        if (conversation.type == Conversation.ConversationType.Single) {
+        if (conversation.type == Conversation.ConversationType.Single || conversation.type == Conversation.ConversationType.Group) {
             long now = System.currentTimeMillis();
             if (now - lastTypingTime > TYPING_INTERVAL_IN_SECOND * 1000) {
                 lastTypingTime = now;
@@ -623,7 +748,13 @@ public class ConversationInputPanel extends FrameLayout implements IEmotionSelec
 
     @Override
     public void onStickerSelected(String categoryName, String stickerName, String stickerBitmapPath) {
-        String remoteUrl = sharedPreferences.getString(stickerBitmapPath, null);
+        String key;
+        if (conversation.type == Conversation.ConversationType.SecretChat) {
+            key = conversation.target + "_" + stickerBitmapPath;
+        } else {
+            key = stickerBitmapPath;
+        }
+        String remoteUrl = sharedPreferences.getString(key, null);
         messageViewModel.sendStickerMsg(conversation, stickerBitmapPath, remoteUrl);
     }
 

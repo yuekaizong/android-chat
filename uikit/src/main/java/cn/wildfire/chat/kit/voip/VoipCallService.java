@@ -35,18 +35,24 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import cn.wildfire.chat.kit.BuildConfig;
+import cn.wildfire.chat.kit.Config;
 import cn.wildfire.chat.kit.GlideApp;
 import cn.wildfire.chat.kit.R;
 import cn.wildfirechat.avenginekit.AVEngineKit;
 import cn.wildfirechat.avenginekit.PeerConnectionClient;
+import cn.wildfirechat.message.JoinCallRequestMessageContent;
+import cn.wildfirechat.message.Message;
+import cn.wildfirechat.message.MultiCallOngoingMessageContent;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.UserInfo;
 import cn.wildfirechat.remote.ChatManager;
+import cn.wildfirechat.remote.OnReceiveMessageListener;
 
-public class VoipCallService extends Service {
+public class VoipCallService extends Service implements OnReceiveMessageListener {
     private static final int NOTIFICATION_ID = 1;
 
     private WindowManager wm;
@@ -63,6 +69,13 @@ public class VoipCallService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        ChatManager.Instance().addOnReceiveMessageListener(this);
+
+        AVEngineKit.CallSession session = AVEngineKit.Instance().getCurrentSession();
+        if (session != null) {
+            initialized = true;
+            startForeground(NOTIFICATION_ID, buildNotification(session));
+        }
     }
 
     @Nullable
@@ -75,7 +88,11 @@ public class VoipCallService extends Service {
     public static void start(Context context, boolean showFloatingView) {
         Intent intent = new Intent(context, VoipCallService.class);
         intent.putExtra("showFloatingView", showFloatingView);
-        context.startService(intent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
     }
 
     public static void stop(Context context) {
@@ -87,6 +104,10 @@ public class VoipCallService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         AVEngineKit.CallSession session = AVEngineKit.Instance().getCurrentSession();
+        if (!initialized) {
+            initialized = true;
+            startForeground(NOTIFICATION_ID, buildNotification(session));
+        }
         if (session == null || session.state == AVEngineKit.CallState.Idle) {
             stopSelf();
             return START_NOT_STICKY;
@@ -100,11 +121,7 @@ public class VoipCallService extends Service {
 
         focusTargetId = intent.getStringExtra("focusTargetId");
         Log.e("wfc", "on startCommand " + focusTargetId);
-        if (!initialized) {
-            initialized = true;
-            startForeground(NOTIFICATION_ID, buildNotification(session));
-            checkCallState();
-        }
+        checkCallState();
         showFloatingWindow = intent.getBooleanExtra("showFloatingView", false);
         if (showFloatingWindow) {
             rendererInitialized = false;
@@ -118,6 +135,17 @@ public class VoipCallService extends Service {
             hideFloatBox();
         }
         return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        if (Intent.ACTION_MAIN.equals(rootIntent.getAction())) {
+            AVEngineKit.CallSession session = AVEngineKit.Instance().getCurrentSession();
+            if (session != null && session.isConference()) {
+                session.leaveConference(false);
+            }
+        }
     }
 
     private void checkCallState() {
@@ -140,6 +168,13 @@ public class VoipCallService extends Service {
                     }
                 }
             }
+
+            if (session.getState() == AVEngineKit.CallState.Connected
+                && ChatManager.Instance().getUserId().equals(session.getInitiator())) {
+                broadcastCallOngoing(session);
+            }
+
+            handler.removeCallbacks(this::checkCallState);
             handler.postDelayed(this::checkCallState, 1000);
         }
     }
@@ -154,7 +189,12 @@ public class VoipCallService extends Service {
         resumeActivityIntent.putExtra(SingleCallActivity.EXTRA_FROM_FLOATING_VIEW, true);
         resumeActivityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
-        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, resumeActivityIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent pendingIntent;
+        if (Build.VERSION.SDK_INT >= 23) {
+            pendingIntent = PendingIntent.getActivity(this, 0, resumeActivityIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        } else {
+            pendingIntent = PendingIntent.getActivity(this, 0, resumeActivityIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+        }
 
         String channelId = "";
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -197,6 +237,10 @@ public class VoipCallService extends Service {
         if (wm != null && view != null) {
             wm.removeView(view);
         }
+        ChatManager.Instance().removeOnReceiveMessageListener(this);
+
+        NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager.cancel(NOTIFICATION_ID);
     }
 
     private void showFloatingWindow(AVEngineKit.CallSession session) {
@@ -292,7 +336,15 @@ public class VoipCallService extends Service {
             wm.addView(view, params);
         }
         view.findViewById(R.id.screenSharingTextView).setVisibility(View.VISIBLE);
-        view.findViewById(R.id.durationTextView).setVisibility(View.GONE);
+        TextView durationTextView = view.findViewById(R.id.durationTextView);
+        durationTextView.setVisibility(View.VISIBLE);
+        long duration = (System.currentTimeMillis() - session.getConnectedTime()) / 1000;
+        if (duration >= 3600) {
+            durationTextView.setText(String.format("%d:%02d:%02d", duration / 3600, (duration % 3600) / 60, (duration % 60)));
+        } else {
+            durationTextView.setText(String.format("%02d:%02d", (duration % 3600) / 60, (duration % 60)));
+        }
+
         view.findViewById(R.id.av_media_type).setVisibility(View.GONE);
     }
 
@@ -310,7 +362,7 @@ public class VoipCallService extends Service {
         ImageView mediaIconV = view.findViewById(R.id.av_media_type);
         mediaIconV.setImageResource(R.drawable.av_float_audio);
 
-        long duration = (System.currentTimeMillis() - session.getStartTime()) / 1000;
+        long duration = (System.currentTimeMillis() - session.getConnectedTime()) / 1000;
         if (duration >= 3600) {
             timeView.setText(String.format("%d:%02d:%02d", duration / 3600, (duration % 3600) / 60, (duration % 60)));
         } else {
@@ -325,7 +377,7 @@ public class VoipCallService extends Service {
     private String nextFocusUserId(AVEngineKit.CallSession session) {
         if (!TextUtils.isEmpty(focusTargetId) && (session.getParticipantIds().contains(focusTargetId))) {
             PeerConnectionClient client = session.getClient(focusTargetId);
-            if (client != null && client.state == AVEngineKit.CallState.Connected && !client.videoMuted) {
+            if (client != null && client.state == AVEngineKit.CallState.Connected && !client.videoMuted && !client.audience) {
                 return focusTargetId;
             }
         }
@@ -371,7 +423,7 @@ public class VoipCallService extends Service {
         remoteVideoFrameLayout.setVisibility(View.VISIBLE);
         LinearLayout videoContainer = remoteVideoFrameLayout.findViewById(R.id.videoContainer);
 
-        Log.e("wfc", "nextFocusUserId " + nextFocusUserId);
+//        Log.e("wfc", "nextFocusUserId " + nextFocusUserId);
         if (!rendererInitialized || lastState != session.getState() || !TextUtils.equals(lastFocusUserId, nextFocusUserId)) {
             rendererInitialized = true;
             lastState = session.getState();
@@ -382,8 +434,13 @@ public class VoipCallService extends Service {
 
             if (TextUtils.equals(ChatManager.Instance().getUserId(), nextFocusUserId)) {
                 session.setupLocalVideoView(videoContainer, SCALE_ASPECT_BALANCED);
+                // 因为remoteVideoViewContainer 和 localVideoViewContainer 是同一个，所以切换的时候，需要清一下
+                if (!TextUtils.isEmpty(lastFocusUserId)) {
+                    session.setupRemoteVideoView(lastFocusUserId, null, SCALE_ASPECT_BALANCED);
+                }
             } else {
                 session.setupRemoteVideoView(nextFocusUserId, videoContainer, SCALE_ASPECT_BALANCED);
+                session.setupLocalVideoView(null, SCALE_ASPECT_BALANCED);
             }
             lastFocusUserId = nextFocusUserId;
         }
@@ -402,6 +459,13 @@ public class VoipCallService extends Service {
         }
         showFloatingWindow = false;
         startActivity(resumeActivityIntent);
+    }
+
+    private void broadcastCallOngoing(AVEngineKit.CallSession callSession) {
+        if (Config.ENABLE_MULTI_CALL_AUTO_JOIN && !callSession.isConference() && callSession.getConversation().type == Conversation.ConversationType.Group) {
+            MultiCallOngoingMessageContent ongoingMessageContent = new MultiCallOngoingMessageContent(callSession.getCallId(), callSession.getInitiator(), callSession.isAudioOnly(), callSession.getParticipantIds());
+            ChatManager.Instance().sendMessage(callSession.getConversation(), ongoingMessageContent, null, 0, null);
+        }
     }
 
     View.OnTouchListener onTouchListener = new View.OnTouchListener() {
@@ -439,4 +503,22 @@ public class VoipCallService extends Service {
             return true;
         }
     };
+
+    @Override
+    public void onReceiveMessage(List<Message> messages, boolean hasMore) {
+        AVEngineKit.CallSession session = AVEngineKit.Instance().getCurrentSession();
+        if (session != null && session.getState() == AVEngineKit.CallState.Connected) {
+            for (int i = 0; i < messages.size(); i++) {
+                Message message = messages.get(i);
+                if (message.content instanceof JoinCallRequestMessageContent) {
+                    JoinCallRequestMessageContent request = (JoinCallRequestMessageContent) message.content;
+                    if (session.getCallId().equals(request.getCallId()) && session.getInitiator().equals(ChatManager.Instance().getUserId())) {
+                        List<String> ps = new ArrayList<>();
+                        ps.add(message.sender);
+                        session.inviteNewParticipants(ps, request.getClientId(), true);
+                    }
+                }
+            }
+        }
+    }
 }

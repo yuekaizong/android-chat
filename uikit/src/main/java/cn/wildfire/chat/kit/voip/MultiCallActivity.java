@@ -5,7 +5,11 @@
 package cn.wildfire.chat.kit.voip;
 
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -21,7 +25,6 @@ import cn.wildfire.chat.kit.group.GroupViewModel;
 import cn.wildfire.chat.kit.group.PickGroupMemberActivity;
 import cn.wildfirechat.avenginekit.AVAudioManager;
 import cn.wildfirechat.avenginekit.AVEngineKit;
-import cn.wildfirechat.avenginekit.VideoProfile;
 import cn.wildfirechat.model.GroupInfo;
 import cn.wildfirechat.remote.ChatManager;
 
@@ -64,6 +67,18 @@ public class MultiCallActivity extends VoipBaseActivity {
             fragment = new MultiCallVideoFragment();
         }
 
+        View decorView = getWindow().getDecorView();
+        int uiOptions = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+            uiOptions |= View.SYSTEM_UI_FLAG_IMMERSIVE;
+        }
+        decorView.setSystemUiVisibility(uiOptions);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            Window w = getWindow();
+            w.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+        }
+
         currentCallSessionCallback = (AVEngineKit.CallSessionCallback) fragment;
         FragmentManager fragmentManager = getSupportFragmentManager();
         fragmentManager.beginTransaction()
@@ -91,16 +106,16 @@ public class MultiCallActivity extends VoipBaseActivity {
     }
 
     @Override
-    public void didParticipantJoined(String userId) {
+    public void didParticipantJoined(String userId, boolean screenSharing) {
         postAction(() -> {
-            currentCallSessionCallback.didParticipantJoined(userId);
+            currentCallSessionCallback.didParticipantJoined(userId, screenSharing);
         });
     }
 
     @Override
-    public void didParticipantLeft(String userId, AVEngineKit.CallEndReason callEndReason) {
+    public void didParticipantLeft(String userId, AVEngineKit.CallEndReason callEndReason, boolean screenSharing) {
         postAction(() -> {
-            currentCallSessionCallback.didParticipantLeft(userId, callEndReason);
+            currentCallSessionCallback.didParticipantLeft(userId, callEndReason, screenSharing);
         });
     }
 
@@ -149,9 +164,9 @@ public class MultiCallActivity extends VoipBaseActivity {
     }
 
     @Override
-    public void didReceiveRemoteVideoTrack(String userId) {
+    public void didReceiveRemoteVideoTrack(String userId, boolean screenSharing) {
         postAction(() -> {
-            currentCallSessionCallback.didReceiveRemoteVideoTrack(userId);
+            currentCallSessionCallback.didReceiveRemoteVideoTrack(userId, screenSharing);
         });
     }
 
@@ -237,7 +252,9 @@ public class MultiCallActivity extends VoipBaseActivity {
                 }
             }
         } else {
-            super.onActivityResult(requestCode, resultCode, data);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                super.onActivityResult(requestCode, resultCode, data);
+            }
         }
     }
 }

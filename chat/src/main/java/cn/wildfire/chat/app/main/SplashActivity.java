@@ -12,6 +12,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -28,16 +29,14 @@ import androidx.core.app.ActivityOptionsCompat;
 import androidx.core.content.ContextCompat;
 
 import butterknife.ButterKnife;
-import cn.wildfire.chat.app.login.SMSLoginActivity;
+import cn.wildfire.chat.app.login.LoginActivity;
 import cn.wildfire.chat.kit.Config;
 import cn.wildfirechat.chat.R;
 
 public class SplashActivity extends AppCompatActivity {
 
-    private static String[] permissions = {
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-    };
+    private String[] mandatoryPermissions;
+
     private static final int REQUEST_CODE_DRAW_OVERLAY = 101;
 
     private SharedPreferences sharedPreferences;
@@ -52,27 +51,50 @@ public class SplashActivity extends AppCompatActivity {
         setContentView(R.layout.activity_splash);
         ButterKnife.bind(this);
         hideSystemUI();
-        setStatusBarColor(R.color.white);
+        setStatusBarColor(R.color.gray5);
 
         sharedPreferences = getSharedPreferences(Config.SP_CONFIG_FILE_NAME, Context.MODE_PRIVATE);
         id = sharedPreferences.getString("id", null);
         token = sharedPreferences.getString("token", null);
 
+        if (Build.VERSION.SDK_INT >= 31) {
+            mandatoryPermissions = new String[]{
+                Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                "android.permission.BLUETOOTH_CONNECT"
+            };
+        } else {
+            mandatoryPermissions = new String[]{
+                Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            };
+        }
+
+
         if (checkPermission()) {
             new Handler().postDelayed(this::showNextScreen, 1000);
         } else {
-            requestPermissions(permissions, 100);
+            requestPermissions(mandatoryPermissions, 100);
         }
     }
 
     private boolean checkPermission() {
         boolean granted = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            for (String permission : permissions) {
+            for (String permission : mandatoryPermissions) {
                 granted = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
                 if (!granted) {
                     break;
                 }
+            }
+        }
+        // Android 10 之后，从后台弹出音视频通话，必须要有该权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (!Settings.canDrawOverlays(this)) {
+                granted = false;
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+                startActivityForResult(intent, REQUEST_CODE_DRAW_OVERLAY);
             }
         }
         return granted;
@@ -125,7 +147,7 @@ public class SplashActivity extends AppCompatActivity {
 
     private void showLogin() {
         Intent intent;
-        intent = new Intent(this, SMSLoginActivity.class);
+        intent = new Intent(this, LoginActivity.class);
         intent.putExtra("isKickedOff", getIntent().getBooleanExtra("isKickedOff", false));
         Bundle bundle = ActivityOptionsCompat.makeCustomAnimation(getContext(),
             android.R.anim.fade_in, android.R.anim.fade_out).toBundle();

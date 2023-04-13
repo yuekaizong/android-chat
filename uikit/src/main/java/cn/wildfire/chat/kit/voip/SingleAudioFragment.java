@@ -4,8 +4,6 @@
 
 package cn.wildfire.chat.kit.voip;
 
-import android.content.Context;
-import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
@@ -20,6 +18,9 @@ import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProviders;
 
+import com.bumptech.glide.load.resource.bitmap.RoundedCorners;
+import com.bumptech.glide.request.RequestOptions;
+
 import org.webrtc.StatsReport;
 
 import butterknife.BindView;
@@ -28,6 +29,7 @@ import butterknife.OnClick;
 import cn.wildfire.chat.kit.GlideApp;
 import cn.wildfire.chat.kit.R;
 import cn.wildfire.chat.kit.R2;
+import cn.wildfire.chat.kit.glide.BlurTransformation;
 import cn.wildfire.chat.kit.user.UserViewModel;
 import cn.wildfirechat.avenginekit.AVAudioManager;
 import cn.wildfirechat.avenginekit.AVEngineKit;
@@ -36,6 +38,9 @@ import cn.wildfirechat.remote.ChatManager;
 
 public class SingleAudioFragment extends Fragment implements AVEngineKit.CallSessionCallback {
     private AVEngineKit gEngineKit;
+
+    @BindView(R2.id.backgroundImageView)
+    ImageView backgroundImageView;
 
     @BindView(R2.id.portraitImageView)
     ImageView portraitImageView;
@@ -94,17 +99,17 @@ public class SingleAudioFragment extends Fragment implements AVEngineKit.CallSes
     }
 
     @Override
-    public void didParticipantJoined(String s) {
+    public void didParticipantJoined(String userId, boolean screenSharing) {
 
     }
 
     @Override
-    public void didParticipantConnected(String userId) {
+    public void didParticipantConnected(String userId, boolean screenSharing) {
 
     }
 
     @Override
-    public void didParticipantLeft(String s, AVEngineKit.CallEndReason callEndReason) {
+    public void didParticipantLeft(String s, AVEngineKit.CallEndReason callEndReason, boolean screenSharing) {
 
     }
 
@@ -119,7 +124,7 @@ public class SingleAudioFragment extends Fragment implements AVEngineKit.CallSes
     }
 
     @Override
-    public void didReceiveRemoteVideoTrack(String s) {
+    public void didReceiveRemoteVideoTrack(String userId, boolean screenSharing) {
 
     }
 
@@ -154,17 +159,10 @@ public class SingleAudioFragment extends Fragment implements AVEngineKit.CallSes
 
     @Override
     public void didAudioDeviceChanged(AVAudioManager.AudioDevice device) {
-        AudioManager audioManager = (AudioManager) getActivity().getSystemService(Context.AUDIO_SERVICE);
-        if(audioManager.isSpeakerphoneOn()) {
-            spearImageView.setSelected(true);
-        } else {
+        if (device == AVAudioManager.AudioDevice.WIRED_HEADSET || device == AVAudioManager.AudioDevice.EARPIECE || device == AVAudioManager.AudioDevice.BLUETOOTH) {
             spearImageView.setSelected(false);
-        }
-
-        if(device == AVAudioManager.AudioDevice.WIRED_HEADSET || device == AVAudioManager.AudioDevice.BLUETOOTH) {
-            spearImageView.setEnabled(false);
         } else {
-            spearImageView.setEnabled(true);
+            spearImageView.setSelected(true);
         }
     }
 
@@ -215,16 +213,19 @@ public class SingleAudioFragment extends Fragment implements AVEngineKit.CallSes
         if (session == null || (session.getState() != AVEngineKit.CallState.Connected && session.getState() != AVEngineKit.CallState.Outgoing)) {
             return;
         }
-        AudioManager audioManager = (AudioManager) getActivity().getSystemService(Context.AUDIO_SERVICE);
-        boolean isSpeakerOn = audioManager.isSpeakerphoneOn();
-        if (isSpeakerOn) {
-            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
-        } else {
-            audioManager.setMode(AudioManager.MODE_NORMAL);
 
+        AVAudioManager audioManager = AVEngineKit.Instance().getAVAudioManager();
+        AVAudioManager.AudioDevice currentAudioDevice = audioManager.getSelectedAudioDevice();
+        if (currentAudioDevice == AVAudioManager.AudioDevice.WIRED_HEADSET || currentAudioDevice == AVAudioManager.AudioDevice.BLUETOOTH) {
+            return;
         }
-        spearImageView.setSelected(!isSpeakerOn);
-        audioManager.setSpeakerphoneOn(!isSpeakerOn);
+        if (currentAudioDevice == AVAudioManager.AudioDevice.SPEAKER_PHONE) {
+            audioManager.selectAudioDevice(AVAudioManager.AudioDevice.EARPIECE);
+            spearImageView.setSelected(false);
+        } else {
+            audioManager.selectAudioDevice(AVAudioManager.AudioDevice.SPEAKER_PHONE);
+            spearImageView.setSelected(true);
+        }
     }
 
     private void init() {
@@ -252,14 +253,22 @@ public class SingleAudioFragment extends Fragment implements AVEngineKit.CallSes
         }
         String targetId = session.getParticipantIds().get(0);
         UserInfo userInfo = ChatManager.Instance().getUserInfo(targetId, false);
-        GlideApp.with(this).load(userInfo.portrait).placeholder(R.mipmap.avatar_def).into(portraitImageView);
+        GlideApp.with(this)
+            .load(userInfo.portrait)
+            .placeholder(R.mipmap.avatar_def)
+            .apply(RequestOptions.bitmapTransform(new RoundedCorners(10)))
+            .into(portraitImageView);
+        GlideApp.with(this)
+            .load(userInfo.portrait)
+            .apply(RequestOptions.bitmapTransform(new BlurTransformation(10)))
+            .into(backgroundImageView);
         UserViewModel userViewModel = ViewModelProviders.of(this).get(UserViewModel.class);
         nameTextView.setText(userViewModel.getUserDisplayName(userInfo));
         muteImageView.setSelected(session.isAudioMuted());
         updateCallDuration();
 
-        AudioManager audioManager = (AudioManager) getActivity().getSystemService(Context.AUDIO_SERVICE);
-        spearImageView.setSelected(audioManager.isSpeakerphoneOn());
+        AVAudioManager audioManager = AVEngineKit.Instance().getAVAudioManager();
+        spearImageView.setSelected(audioManager.getSelectedAudioDevice() == AVAudioManager.AudioDevice.SPEAKER_PHONE);
     }
 
     private void runOnUiThread(Runnable runnable) {

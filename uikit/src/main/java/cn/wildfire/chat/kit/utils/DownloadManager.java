@@ -8,14 +8,24 @@ import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 
+import cn.wildfire.chat.kit.Config;
+import cn.wildfirechat.message.FileMessageContent;
+import cn.wildfirechat.message.MediaMessageContent;
+import cn.wildfirechat.message.Message;
+import cn.wildfirechat.message.MessageContent;
+import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.remote.ChatManager;
+import cn.wildfirechat.remote.GeneralCallbackBytes;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -31,7 +41,7 @@ public class DownloadManager {
     private static final OkHttpClient okHttpClient = new OkHttpClient();
 
     public static void download(final String url, final String saveDir, final OnDownloadListener listener) {
-        download(url, saveDir, listener);
+        download(url, saveDir, null, listener);
     }
 
     public static void download(final String url, final String saveDir, String name, final OnDownloadListener listener) {
@@ -45,6 +55,11 @@ public class DownloadManager {
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
+                URL _url = call.request().url().url();
+                String query = _url.getQuery();
+                String target = getQueryMap(query).get("target");
+                boolean isSecret = Boolean.parseBoolean(getQueryMap(query).get("secret"));
+
                 InputStream is = null;
                 byte[] buf = new byte[2048];
                 int len = 0;
@@ -54,20 +69,59 @@ public class DownloadManager {
                 String fileName = TextUtils.isEmpty(name) ? getNameFromUrl(url) : name;
                 try {
                     is = response.body().byteStream();
+
                     long total = response.body().contentLength();
                     File file = new File(savePath, fileName);
                     fos = new FileOutputStream(file);
+                    ByteArrayOutputStream bos = null;
+                    if (isSecret) {
+                        bos = new ByteArrayOutputStream();
+                    }
                     long sum = 0;
                     while ((len = is.read(buf)) != -1) {
-                        fos.write(buf, 0, len);
+                        if (bos != null) {
+                            bos.write(buf, 0, len);
+                        } else {
+                            fos.write(buf, 0, len);
+                        }
+
                         sum += len;
                         int progress = (int) (sum * 1.0f / total * 100);
                         // 下载中
                         listener.onProgress(progress);
                     }
-                    fos.flush();
-                    // 下载完成
-                    listener.onSuccess(file);
+                    if (isSecret) {
+                        CountDownLatch latch = new CountDownLatch(1);
+                        FileOutputStream finalFos = fos;
+                        ChatManager.Instance().decodeSecretDataAsync(target, bos.toByteArray(), new GeneralCallbackBytes() {
+                            @Override
+                            public void onSuccess(byte[] data) {
+                                try {
+                                    finalFos.write(data);
+                                    finalFos.flush();
+                                    listener.onSuccess(file);
+                                } catch (IOException e) {
+                                    e.printStackTrace();
+                                }
+                                latch.countDown();
+                            }
+
+                            @Override
+                            public void onFail(int errorCode) {
+                                File file = new File(savePath, fileName);
+                                if (file.exists()) {
+                                    file.delete();
+                                }
+                                listener.onFail();
+                                latch.countDown();
+                            }
+                        });
+                        latch.await();
+                    } else {
+                        fos.flush();
+                        // 下载完成
+                        listener.onSuccess(file);
+                    }
                 } catch (Exception e) {
                     File file = new File(savePath, fileName);
                     if (file.exists()) {
@@ -93,6 +147,72 @@ public class DownloadManager {
     }
 
     /**
+     * 密聊时，媒体文件都是经过加密的，这个函数构造一个带特定参数的url，然后通过 {@link #download(String, String, String, OnDownloadListener)
+     * 或者{@link #download(String, String, OnDownloadListener)}} 下载时，回调返回的文件是解密之后的
+     *
+     * @param mediaMessage
+     * @return
+     */
+    public static String buildSecretChatMediaUrl(Message mediaMessage) {
+        if (!(mediaMessage.content instanceof MediaMessageContent) || mediaMessage.conversation.type != Conversation.ConversationType.SecretChat) {
+            return null;
+        }
+        String remoteUrl = ((MediaMessageContent) mediaMessage.content).remoteUrl;
+        if (TextUtils.isEmpty(remoteUrl)) {
+            return null;
+        }
+        if (remoteUrl.contains("?")) {
+            return remoteUrl + "&target=" + mediaMessage.conversation.target + "&secret=true";
+        } else {
+            return remoteUrl + "?target=" + mediaMessage.conversation.target + "&secret=true";
+        }
+    }
+
+    public static File mediaMessageContentFile(Message message) {
+
+        String dir = null;
+        String name = null;
+        MessageContent content = message.content;
+        if (!(content instanceof MediaMessageContent)) {
+            return null;
+        }
+        if (!TextUtils.isEmpty(((MediaMessageContent) content).localPath)) {
+            File file = new File(((MediaMessageContent) content).localPath);
+            if (file.exists()) {
+                return file;
+            }
+        }
+
+        switch (((MediaMessageContent) content).mediaType) {
+            case VOICE:
+                name = message.messageUid + ".mp3";
+                dir = Config.AUDIO_SAVE_DIR;
+                break;
+            case IMAGE:
+                name = message.messageUid + ".jpg";
+                dir = Config.PHOTO_SAVE_DIR;
+                break;
+            case VIDEO:
+                name = message.messageUid + ".mp4";
+                dir = Config.VIDEO_SAVE_DIR;
+                break;
+            case FILE:
+                if (message.content instanceof FileMessageContent) {
+                    name = message.messageUid + "-" + ((FileMessageContent) message.content).getName();
+                } else {
+                    name = message.messageUid + ".data";
+                }
+                dir = Config.FILE_SAVE_DIR;
+                break;
+            default:
+                dir = Config.FILE_SAVE_DIR;
+                name = message.messageUid + "-" + ".data";
+                break;
+        }
+        return new File(dir, name);
+    }
+
+    /**
      * @param saveDir
      * @return
      * @throws IOException 判断下载目录是否存在
@@ -111,7 +231,7 @@ public class DownloadManager {
      * @return 从下载连接中解析出文件名
      */
     @NonNull
-    private static String getNameFromUrl(String url) {
+    public static String getNameFromUrl(String url) {
         return url.substring(url.lastIndexOf("/") + 1);
     }
 
@@ -120,6 +240,23 @@ public class DownloadManager {
          * 下载成功
          */
         void onSuccess(File file);
+
+        /**
+         * @param progress 下载进度
+         */
+        void onProgress(int progress);
+
+        /**
+         * 下载失败
+         */
+        void onFail();
+    }
+
+    public interface OnDownloadListenerEx {
+        /**
+         * 下载成功
+         */
+        void onSuccess(byte[] bytes);
 
         /**
          * @param progress 下载进度
@@ -141,7 +278,7 @@ public class DownloadManager {
 
         @Override
         final public void onProgress(int progress) {
-            ChatManager.Instance().getMainHandler().post(() -> onProgress(progress));
+            ChatManager.Instance().getMainHandler().post(() -> onUiProgress(progress));
         }
 
         @Override
@@ -163,27 +300,18 @@ public class DownloadManager {
         }
     }
 
-    public static String urlToMd5(String url) {
-        return md5(url);
-    }
-
-    public static String md5(String s) {
-        try {
-            // Create MD5 Hash
-            MessageDigest digest = java.security.MessageDigest.getInstance("MD5");
-            digest.update(s.getBytes());
-            byte[] messageDigest = digest.digest();
-
-            // Create Hex String
-            StringBuilder hexString = new StringBuilder();
-            for (int i = 0; i < messageDigest.length; i++) {
-                hexString.append(Integer.toHexString(0xFF & messageDigest[i]));
-            }
-
-            return hexString.toString();
-        } catch (NoSuchAlgorithmException e) {
-            e.printStackTrace();
+    private static Map<String, String> getQueryMap(String query) {
+        Map<String, String> map = new HashMap<String, String>();
+        if (TextUtils.isEmpty(query)) {
+            return map;
         }
-        return null;
+
+        String[] params = query.split("&");
+        for (String param : params) {
+            String name = param.split("=")[0];
+            String value = param.split("=")[1];
+            map.put(name, value);
+        }
+        return map;
     }
 }

@@ -5,8 +5,6 @@
 package cn.wildfire.chat.kit.voip;
 
 import android.app.Activity;
-import android.content.Context;
-import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.util.DisplayMetrics;
@@ -106,10 +104,6 @@ public class MultiCallVideoFragment extends Fragment implements AVEngineKit.Call
 
         handler.post(updateCallDurationRunnable);
         updateParticipantStatus(session);
-
-        AudioManager audioManager = (AudioManager) getActivity().getSystemService(Context.AUDIO_SERVICE);
-        audioManager.setMode(AudioManager.MODE_NORMAL);
-        audioManager.setSpeakerphoneOn(true);
 
         muteImageView.setSelected(session.isAudioMuted());
         videoImageView.setSelected(session.videoMuted);
@@ -234,12 +228,19 @@ public class MultiCallVideoFragment extends Fragment implements AVEngineKit.Call
         if (session == null || session.getState() != AVEngineKit.CallState.Connected) {
             return;
         }
-        if (session.videoMuted) {
-            // TODO 目前关闭摄像头之后，不支持屏幕共享
+        if (!AVEngineKit.isSupportConference()) {
+            Toast.makeText(getActivity(), "当前版本不支持屏幕共享", Toast.LENGTH_SHORT).show();
             return;
         }
         if (!session.isScreenSharing()) {
+            Toast.makeText(getContext(), "开启屏幕共享时，将关闭摄像头，并打开麦克风", Toast.LENGTH_LONG).show();
+            session.muteAudio(false);
+            session.muteVideo(true);
+
             ((VoipBaseActivity) getActivity()).startScreenShare();
+            if (session.isAudience()) {
+                session.switchAudience(false);
+            }
         } else {
             ((VoipBaseActivity) getActivity()).stopScreenShare();
         }
@@ -269,7 +270,7 @@ public class MultiCallVideoFragment extends Fragment implements AVEngineKit.Call
     }
 
     @Override
-    public void didParticipantJoined(String userId) {
+    public void didParticipantJoined(String userId, boolean screenSharing) {
         if (participants.contains(userId)) {
             return;
         }
@@ -296,12 +297,12 @@ public class MultiCallVideoFragment extends Fragment implements AVEngineKit.Call
     }
 
     @Override
-    public void didParticipantConnected(String userId) {
+    public void didParticipantConnected(String userId, boolean screenSharing) {
 
     }
 
     @Override
-    public void didParticipantLeft(String userId, AVEngineKit.CallEndReason callEndReason) {
+    public void didParticipantLeft(String userId, AVEngineKit.CallEndReason callEndReason, boolean screenSharing) {
         View view = participantGridView.findViewWithTag(userId);
         if (view != null) {
             participantGridView.removeView(view);
@@ -327,7 +328,7 @@ public class MultiCallVideoFragment extends Fragment implements AVEngineKit.Call
     }
 
     @Override
-    public void didReceiveRemoteVideoTrack(String userId) {
+    public void didReceiveRemoteVideoTrack(String userId, boolean screenSharing) {
     }
 
     @Override
@@ -341,7 +342,6 @@ public class MultiCallVideoFragment extends Fragment implements AVEngineKit.Call
 
     @Override
     public void didError(String reason) {
-        Toast.makeText(getActivity(), "发生错误" + reason, Toast.LENGTH_SHORT).show();
     }
 
     @Override

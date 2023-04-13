@@ -30,8 +30,11 @@ import cn.wildfirechat.message.notification.GroupPrivateChatNotificationContent;
 import cn.wildfirechat.message.notification.GroupSetManagerNotificationContent;
 import cn.wildfirechat.message.notification.KickoffGroupMemberNotificationContent;
 import cn.wildfirechat.message.notification.ModifyGroupAliasNotificationContent;
+import cn.wildfirechat.message.notification.ModifyGroupExtraNotificationContent;
+import cn.wildfirechat.message.notification.ModifyGroupMemberExtraNotificationContent;
 import cn.wildfirechat.message.notification.NotificationMessageContent;
 import cn.wildfirechat.message.notification.QuitGroupNotificationContent;
+import cn.wildfirechat.message.notification.StartSecretChatMessageContent;
 import cn.wildfirechat.message.notification.TipNotificationContent;
 import cn.wildfirechat.message.notification.TransferGroupOwnerNotificationContent;
 
@@ -44,6 +47,8 @@ import cn.wildfirechat.message.notification.TransferGroupOwnerNotificationConten
     DismissGroupNotificationContent.class,
     KickoffGroupMemberNotificationContent.class,
     ModifyGroupAliasNotificationContent.class,
+    ModifyGroupExtraNotificationContent.class,
+    ModifyGroupMemberExtraNotificationContent.class,
     QuitGroupNotificationContent.class,
     TransferGroupOwnerNotificationContent.class,
     TipNotificationContent.class,
@@ -55,7 +60,8 @@ import cn.wildfirechat.message.notification.TransferGroupOwnerNotificationConten
     GroupSetManagerNotificationContent.class,
     GroupMuteMemberNotificationContent.class,
     GroupAllowMemberNotificationContent.class,
-    AddParticipantsMessageContent.class
+    AddParticipantsMessageContent.class,
+    StartSecretChatMessageContent.class
     // TODO add more
 
 })

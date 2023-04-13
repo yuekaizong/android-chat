@@ -8,16 +8,16 @@
 
 | [GitHub仓库地址(主站)](https://github.com/wildfirechat)      | [码云仓库地址(镜像)](https://gitee.com/wfchat)        | 说明                                                                                      | 备注                                           |
 | ------------------------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| [im-server](https://github.com/wildfirechat/im-server)       | [server](https://gitee.com/wfchat/im-server)          | IM Server                                                                                 |                                                |
 | [android-chat](https://github.com/wildfirechat/android-chat) | [android-chat](https://gitee.com/wfchat/android-chat) | 野火IM Android SDK源码和App源码                                                           | 可以很方便地进行二次开发，或集成到现有应用当中 |
 | [ios-chat](https://github.com/wildfirechat/ios-chat)         | [ios-chat](https://gitee.com/wfchat/ios-chat)         | 野火IM iOS SDK源码和App源码                                                               | 可以很方便地进行二次开发，或集成到现有应用当中 |
-| [pc-chat](https://github.com/wildfirechat/pc-chat)           | [pc-chat](https://gitee.com/wfchat/pc-chat)           | 基于[Electron](https://electronjs.org/)开发的PC平台应用                                   |                                                |
-| [web-chat](https://github.com/wildfirechat/web-chat)         | [web-chat](https://gitee.com/wfchat/web-chat)         | Web平台的Demo, [体验地址](http://web.wildfirechat.cn)                                     |                                                |
-| [wx-chat](https://github.com/wildfirechat/wx-chat)           | [wx-chat](https://gitee.com/wfchat/wx-chat)           | 微信小程序平台的Demo                                                                      |                                                |
-| [server](https://github.com/wildfirechat/server)             | [server](https://gitee.com/wfchat/server)             | IM server                                                                                 |                                                |
+| [pc-chat](https://github.com/wildfirechat/vue-pc-chat)       | [pc-chat](https://gitee.com/wfchat/vue-pc-chat)       | 基于[Electron](https://electronjs.org/)开发的PC 端                                        |                                                |
+| [web-chat](https://github.com/wildfirechat/vue-chat)         | [web-chat](https://gitee.com/wfchat/vue-chat)         | 野火IM Web 端, [体验地址](http://web.wildfirechat.cn)                                     |                                                |
+| [wx-chat](https://github.com/wildfirechat/wx-chat)           | [wx-chat](https://gitee.com/wfchat/wx-chat)           | 小程序平台的Demo(支持微信、百度、阿里、字节、QQ 等小程序平台)                             |                                                |
 | [app server](https://github.com/wildfirechat/app_server)     | [app server](https://gitee.com/wfchat/app_server)     | 应用服务端                                                                                |                                                |
 | [robot_server](https://github.com/wildfirechat/robot_server) | [robot_server](https://gitee.com/wfchat/robot_server) | 机器人服务端                                                                              |                                                |
 | [push_server](https://github.com/wildfirechat/push_server)   | [push_server](https://gitee.com/wfchat/push_server)   | 推送服务器                                                                                |                                                |
-| [docs](https://github.com/wildfirechat/docs)                 | [docs](https://gitee.com/wfchat/docs)                 | 野火IM相关文档，包含设计、概念、开发、使用说明，[在线查看](https://docs.wildfirechat.cn/) |                                                |  |
+| [docs](https://github.com/wildfirechat/docs)                 | [docs](https://gitee.com/wfchat/docs)                 | 野火IM相关文档，包含设计、概念、开发、使用说明，[在线查看](https://docs.wildfirechat.cn/) |                                                |
 
 
 ## 说明
@@ -35,8 +35,6 @@
 
 野火IM采用bugly作为日志手机工具，大家二次开发时，务必将```MyApp.java```中的 ```bugly id``` 替换为你们自己的，否则错误日志都跑我们这儿来了，你们收集不到错误日志，我们也会受到干扰。
 
-另外，如果可以请告知我们，我们会在案例参考把项目加上。
-
 ## 混淆说明
 1. 确保所依赖的```lifecycle```版本在2.2.0或以上。
 2. 参考```chat/proguard-rules.pro```进行配置。
@@ -45,6 +43,9 @@
 
 野火IM Android 客户端，基于```AndroidX```包开发，如果老项目采用的是```Android Support```包，可尝试采用[jetifier](https://developer.android.google.cn/studio/command-line/jetifier?hl=zh_cn)
 转成```Android Support```软件包。
+
+## Android 4.x 说明
+请使用[api-19](https://github.com/wildfirechat/android-chat/tree/api-19)分支，如果编译失败等，可能是4.x版本的协议栈版本没有及时更新所导致，请微信联系 wfchat 进行更新。
 
 ## 升级注意
 v0.8.0 版本，对代码结构及部分实现机制进行了大量调整，变动如下：
@@ -110,6 +111,9 @@ v0.8.0 版本，对代码结构及部分实现机制进行了大量调整，变�
 2. uikit部分，自行下载代码，并将uikit module引入你们自己的项目。
 3. push部分，自行下载代码，将push module引入你们自己的项目。
 
+## 推送
+当应用在后台后，不同手机厂家有着不同的后台策略，可能很快或者最终会被冻结和杀掉，此时收到消息需要厂商的推送通知服务。请部署推送服务，推送服务代码可以在[Github](https://github.com/wildfirechat/push_server)和[码云](https://gitee.com/wfchat/push_server)下载。具体使用方式，请参考推送服务项目上的说明。
+
 ## 贡献
 欢迎提交pull request，一起打造一个更好的开源IM。
 
@@ -121,10 +125,6 @@ v0.8.0 版本，对代码结构及部分实现机制进行了大量调整，变�
 5. Gif动态图来源于网络，对网友的制作表示感谢。
 
 如果有什么地方侵犯了您的权益，请联系我们删除🙏🙏🙏
-
-## 案例参考
-
-todo
 
 ## License
 

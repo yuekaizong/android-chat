@@ -5,15 +5,14 @@
 package cn.wildfire.chat.kit.conversation;
 
 import android.app.Activity;
-import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.Pair;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -37,8 +36,13 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 
+import java.io.File;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -48,6 +52,7 @@ import cn.wildfire.chat.kit.ChatManagerHolder;
 import cn.wildfire.chat.kit.R;
 import cn.wildfire.chat.kit.R2;
 import cn.wildfire.chat.kit.WfcUIKit;
+import cn.wildfire.chat.kit.channel.ChannelInfoActivity;
 import cn.wildfire.chat.kit.channel.ChannelViewModel;
 import cn.wildfire.chat.kit.chatroom.ChatRoomViewModel;
 import cn.wildfire.chat.kit.common.OperateResult;
@@ -56,20 +61,27 @@ import cn.wildfire.chat.kit.conversation.mention.MentionSpan;
 import cn.wildfire.chat.kit.conversation.message.model.UiMessage;
 import cn.wildfire.chat.kit.conversation.multimsg.MultiMessageAction;
 import cn.wildfire.chat.kit.conversation.multimsg.MultiMessageActionManager;
+import cn.wildfire.chat.kit.conversation.receipt.GroupMessageReceiptActivity;
 import cn.wildfire.chat.kit.group.GroupViewModel;
 import cn.wildfire.chat.kit.group.PickGroupMemberActivity;
 import cn.wildfire.chat.kit.third.utils.UIUtils;
 import cn.wildfire.chat.kit.user.UserInfoActivity;
 import cn.wildfire.chat.kit.user.UserViewModel;
+import cn.wildfire.chat.kit.utils.DownloadManager;
 import cn.wildfire.chat.kit.viewmodel.MessageViewModel;
 import cn.wildfire.chat.kit.viewmodel.SettingViewModel;
+import cn.wildfire.chat.kit.viewmodel.UserOnlineStateViewModel;
 import cn.wildfire.chat.kit.widget.InputAwareLayout;
 import cn.wildfire.chat.kit.widget.KeyboardAwareLinearLayout;
 import cn.wildfirechat.avenginekit.AVEngineKit;
+import cn.wildfirechat.message.EnterChannelChatMessageContent;
+import cn.wildfirechat.message.LeaveChannelChatMessageContent;
 import cn.wildfirechat.message.Message;
 import cn.wildfirechat.message.MessageContent;
+import cn.wildfirechat.message.MultiCallOngoingMessageContent;
 import cn.wildfirechat.message.TypingMessageContent;
 import cn.wildfirechat.message.core.MessageDirection;
+import cn.wildfirechat.message.notification.RecallMessageContent;
 import cn.wildfirechat.message.notification.TipNotificationContent;
 import cn.wildfirechat.model.ChannelInfo;
 import cn.wildfirechat.model.ChatRoomInfo;
@@ -78,6 +90,7 @@ import cn.wildfirechat.model.ConversationInfo;
 import cn.wildfirechat.model.GroupInfo;
 import cn.wildfirechat.model.GroupMember;
 import cn.wildfirechat.model.UserInfo;
+import cn.wildfirechat.model.UserOnlineState;
 import cn.wildfirechat.remote.ChatManager;
 import cn.wildfirechat.remote.UserSettingScope;
 
@@ -98,9 +111,11 @@ public class ConversationFragment extends Fragment implements
     private Conversation conversation;
     private boolean loadingNewMessage;
     private boolean shouldContinueLoadNewMessage = false;
+    private boolean isPreJoinedChatRoom = true;
 
     private static final int MESSAGE_LOAD_COUNT_PER_TIME = 20;
     private static final int MESSAGE_LOAD_AROUND = 10;
+    private static final long TYPING_INTERNAL = 10 * 1000;
 
     @BindView(R2.id.rootLinearLayout)
     InputAwareLayout rootLinearLayout;
@@ -108,6 +123,9 @@ public class ConversationFragment extends Fragment implements
     SwipeRefreshLayout swipeRefreshLayout;
     @BindView(R2.id.msgRecyclerView)
     RecyclerView recyclerView;
+
+    @BindView(R2.id.ongoingCallRecyclerView)
+    RecyclerView ongoingCallRecyclerView;
 
     @BindView(R2.id.inputPanelFrameLayout)
     ConversationInputPanel inputPanel;
@@ -123,9 +141,11 @@ public class ConversationFragment extends Fragment implements
     TextView unreadMentionCountTextView;
 
     private ConversationMessageAdapter adapter;
+    private OngoingCallAdapter ongoingCallAdapter;
     private boolean moveToBottom = true;
     private ConversationViewModel conversationViewModel;
     private SettingViewModel settingViewModel;
+    private UserOnlineStateViewModel userOnlineStateViewModel;
     private MessageViewModel messageViewModel;
     private UserViewModel userViewModel;
     private GroupViewModel groupViewModel;
@@ -146,6 +166,9 @@ public class ConversationFragment extends Fragment implements
     private Observer<List<GroupMember>> groupMembersUpdateLiveDataObserver;
     private Observer<List<GroupInfo>> groupInfosUpdateLiveDataObserver;
     private Observer<Object> settingUpdateLiveDataObserver;
+    private Map<String, Message> ongoingCalls;
+
+    private Map<String, Message> typingMessageMap;
 
     private Observer<UiMessage> messageLiveDataObserver = new Observer<UiMessage>() {
         @Override
@@ -154,7 +177,39 @@ public class ConversationFragment extends Fragment implements
                 return;
             }
             MessageContent content = uiMessage.message.content;
-            if (isDisplayableMessage(uiMessage)) {
+
+            if (content instanceof MultiCallOngoingMessageContent) {
+                MultiCallOngoingMessageContent ongoingCall = (MultiCallOngoingMessageContent) content;
+                AVEngineKit.CallSession callSession = AVEngineKit.Instance().getCurrentSession();
+                if (ongoingCall.getInitiator().equals(ChatManager.Instance().getUserId())
+                    || ongoingCall.getTargets().contains(ChatManager.Instance().getUserId())
+                    || (callSession != null && callSession.getState() != AVEngineKit.CallState.Idle)) {
+                    return;
+                }
+
+                if (ongoingCalls == null) {
+                    ongoingCalls = new HashMap<>();
+                }
+                ongoingCalls.put(ongoingCall.getCallId(), uiMessage.message);
+
+                if (ongoingCalls.size() > 0) {
+                    ongoingCallRecyclerView.setVisibility(View.VISIBLE);
+                    if (ongoingCallAdapter == null) {
+                        ongoingCallAdapter = new OngoingCallAdapter();
+                        ongoingCallRecyclerView.setAdapter(ongoingCallAdapter);
+                        ongoingCallRecyclerView.setLayoutManager(new LinearLayoutManager(getActivity()));
+                    }
+                    ongoingCallAdapter.setOngoingCalls(new ArrayList<>(ongoingCalls.values()));
+                } else {
+                    ongoingCallRecyclerView.setVisibility(View.GONE);
+                    ongoingCallAdapter.setOngoingCalls(null);
+                }
+                cleanExpiredOngoingCalls();
+
+                return;
+            }
+
+            if (isDisplayableMessage(uiMessage) && !(content instanceof RecallMessageContent)) {
                 // 消息定位时，如果收到新消息、或者发送消息，需要重新加载消息列表
                 if (shouldContinueLoadNewMessage) {
                     shouldContinueLoadNewMessage = false;
@@ -175,9 +230,19 @@ public class ConversationFragment extends Fragment implements
                 }
             }
             if (content instanceof TypingMessageContent && uiMessage.message.direction == MessageDirection.Receive) {
-                updateTypingStatusTitle((TypingMessageContent) content);
+                if (typingMessageMap == null) {
+                    typingMessageMap = new HashMap<>();
+                }
+                long now = System.currentTimeMillis();
+                if (now - uiMessage.message.serverTime + ChatManager.Instance().getServerDeltaTime() < TYPING_INTERNAL) {
+                    typingMessageMap.put(uiMessage.message.sender, uiMessage.message);
+                }
+                updateTypingStatusTitle();
             } else {
-                resetConversationTitle();
+                if (uiMessage.message.direction == MessageDirection.Receive && typingMessageMap != null) {
+                    typingMessageMap.remove(uiMessage.message.sender);
+                }
+                updateTypingStatusTitle();
             }
 
             if (getLifecycle().getCurrentState() == Lifecycle.State.RESUMED && uiMessage.message.direction == MessageDirection.Receive) {
@@ -188,11 +253,25 @@ public class ConversationFragment extends Fragment implements
     private Observer<UiMessage> messageUpdateLiveDatObserver = new Observer<UiMessage>() {
         @Override
         public void onChanged(@Nullable UiMessage uiMessage) {
-            if (!isMessageInCurrentConversation(uiMessage)) {
-                return;
-            }
-            if (isDisplayableMessage(uiMessage)) {
-                adapter.updateMessage(uiMessage);
+            // 聊天室，对方撤回消息
+            if (conversation.type == Conversation.ConversationType.ChatRoom && uiMessage.message.conversation == null) {
+                List<UiMessage> messages = adapter.getMessages();
+                for (UiMessage uiMsg : messages) {
+                    if (uiMsg.message.messageUid == uiMessage.message.messageUid) {
+                        RecallMessageContent content = new RecallMessageContent(uiMsg.message.sender, uiMsg.message.messageUid);
+                        content.setOriginalSender(uiMsg.message.sender);
+                        uiMsg.message.content = content;
+                        adapter.updateMessage(uiMsg);
+                        break;
+                    }
+                }
+            } else {
+                if (!isMessageInCurrentConversation(uiMessage)) {
+                    return;
+                }
+                if (isDisplayableMessage(uiMessage)) {
+                    adapter.updateMessage(uiMessage);
+                }
             }
         }
     };
@@ -214,16 +293,27 @@ public class ConversationFragment extends Fragment implements
         return uiMessage.message.messageId != 0;
     }
 
-    private Observer<Map<String, String>> mediaUploadedLiveDataObserver = new Observer<Map<String, String>>() {
+    private Observer<Pair<String, Long>> messageStartBurnLiveDataObserver = new Observer<Pair<String, Long>>() {
         @Override
-        public void onChanged(@Nullable Map<String, String> stringStringMap) {
-            SharedPreferences sharedPreferences = getActivity().getSharedPreferences("sticker", Context.MODE_PRIVATE);
-            for (Map.Entry<String, String> entry : stringStringMap.entrySet()) {
-                sharedPreferences.edit()
-                    .putString(entry.getKey(), entry.getValue())
-                    .apply();
-            }
+        public void onChanged(@Nullable Pair<String, Long> pair) {
+            // 当通过server api删除消息时，只知道消息的uid
+//            if (uiMessage.message.conversation != null && !isMessageInCurrentConversation(uiMessage)) {
+//                return;
+//            }
+//            if (uiMessage.message.messageId == 0 || isDisplayableMessage(uiMessage)) {
+//                adapter.removeMessage(uiMessage);
+//            }
+//            adapter.removeMessage();
+            // TODO
+        }
+    };
 
+    private Observer<List<Long>> messageBurnedLiveDataObserver = new Observer<List<Long>>() {
+        @Override
+        public void onChanged(@Nullable List<Long> messageIds) {
+            for (int i = 0; i < messageIds.size(); i++) {
+                adapter.removeMessageById(messageIds.get(i));
+            }
         }
     };
 
@@ -250,6 +340,19 @@ public class ConversationFragment extends Fragment implements
             int start = layoutManager.findFirstVisibleItemPosition();
             int end = layoutManager.findLastVisibleItemPosition();
             adapter.notifyItemRangeChanged(start, end - start + 1, userInfos);
+        }
+    };
+
+    private Observer<Map<String, UserOnlineState>> userOnlineStateLiveDataObserver = new Observer<Map<String, UserOnlineState>>() {
+        @Override
+        public void onChanged(Map<String, UserOnlineState> userOnlineStateMap) {
+            if (conversation == null) {
+                return;
+            }
+            if (conversation.type == Conversation.ConversationType.Single) {
+                conversationTitle = null;
+                setTitle();
+            }
         }
     };
 
@@ -329,10 +432,29 @@ public class ConversationFragment extends Fragment implements
     }
 
     public void setupConversation(Conversation conversation, String title, long focusMessageId, String target) {
+        setupConversation(conversation, title, focusMessageId, target, false);
+    }
+
+    public void setupConversation(Conversation conversation, String title, long focusMessageId, String target, boolean isJoinedChatRoom) {
+        if (this.conversation != null) {
+            if ((this.conversation.type == Conversation.ConversationType.Single && !ChatManager.Instance().isMyFriend(this.conversation.target))
+                || this.conversation.type == Conversation.ConversationType.Group) {
+                userOnlineStateViewModel.unwatchOnlineState(this.conversation.type.getValue(), new String[]{this.conversation.target});
+            }
+            this.adapter = new ConversationMessageAdapter(this);
+            this.recyclerView.setAdapter(this.adapter);
+        }
+
+        if ((conversation.type == Conversation.ConversationType.Single && !ChatManager.Instance().isMyFriend(conversation.target))
+            || conversation.type == Conversation.ConversationType.Group) {
+            userOnlineStateViewModel.watchUserOnlineState(conversation.type.getValue(), new String[]{conversation.target});
+        }
+
         this.conversation = conversation;
         this.conversationTitle = title;
         this.initialFocusedMessageId = focusMessageId;
         this.channelPrivateChatUser = target;
+        this.isPreJoinedChatRoom = isJoinedChatRoom;
         setupConversation(conversation);
     }
 
@@ -383,15 +505,23 @@ public class ConversationFragment extends Fragment implements
         inputPanel.init(this, rootLinearLayout);
         inputPanel.setOnConversationInputPanelStateChangeListener(this);
 
-        settingViewModel = ViewModelProviders.of(this).get(SettingViewModel.class);
         conversationViewModel = WfcUIKit.getAppScopeViewModel(ConversationViewModel.class);
         conversationViewModel.clearConversationMessageLiveData().observeForever(clearConversationMessageObserver);
+        conversationViewModel.secretConversationStateLiveData().observe(getViewLifecycleOwner(), new Observer<Pair<String, ChatManager.SecretChatState>>() {
+            @Override
+            public void onChanged(Pair<String, ChatManager.SecretChatState> stringSecretChatStatePair) {
+                if (conversation != null && conversation.type == Conversation.ConversationType.SecretChat && conversation.target.equals(stringSecretChatStatePair.first)) {
+                    reloadMessage();
+                }
+            }
+        });
         messageViewModel = ViewModelProviders.of(this).get(MessageViewModel.class);
 
         messageViewModel.messageLiveData().observeForever(messageLiveDataObserver);
         messageViewModel.messageUpdateLiveData().observeForever(messageUpdateLiveDatObserver);
         messageViewModel.messageRemovedLiveData().observeForever(messageRemovedLiveDataObserver);
-        messageViewModel.mediaUpdateLiveData().observeForever(mediaUploadedLiveDataObserver);
+        messageViewModel.messageStartBurnLiveData().observeForever(messageStartBurnLiveDataObserver);
+        messageViewModel.messageBurnedLiveData().observeForever(messageBurnedLiveDataObserver);
 
         messageViewModel.messageDeliverLiveData().observe(getActivity(), stringLongMap -> {
             if (conversation == null) {
@@ -423,11 +553,16 @@ public class ConversationFragment extends Fragment implements
             }
             reloadMessage();
         };
+
+        settingViewModel = ViewModelProviders.of(this).get(SettingViewModel.class);
         settingViewModel.settingUpdatedLiveData().observeForever(settingUpdateLiveDataObserver);
+
+        userOnlineStateViewModel = ViewModelProviders.of(this).get(UserOnlineStateViewModel.class);
+        userOnlineStateViewModel.getUserOnlineStateLiveData().observe(getViewLifecycleOwner(), userOnlineStateLiveDataObserver);
+
     }
 
     private void setupConversation(Conversation conversation) {
-
         if (conversation.type == Conversation.ConversationType.Group) {
             groupViewModel = ViewModelProviders.of(this).get(GroupViewModel.class);
             initGroupObservers();
@@ -444,8 +579,17 @@ public class ConversationFragment extends Fragment implements
 
         if (conversation.type != Conversation.ConversationType.ChatRoom) {
             loadMessage(initialFocusedMessageId);
-        } else {
-            joinChatRoom();
+        }
+        if (conversation.type == Conversation.ConversationType.ChatRoom) {
+            chatRoomViewModel = ViewModelProviders.of(this).get(ChatRoomViewModel.class);
+            if (!isPreJoinedChatRoom) {
+                joinChatRoom();
+            } else {
+                loadMoreOldMessages(true);
+            }
+        } else if (conversation.type == Conversation.ConversationType.Channel) {
+            EnterChannelChatMessageContent content = new EnterChannelChatMessageContent();
+            messageViewModel.sendMessage(conversation, content);
         }
 
         ConversationInfo conversationInfo = ChatManager.Instance().getConversation(conversation);
@@ -455,6 +599,8 @@ public class ConversationFragment extends Fragment implements
             showUnreadMessageCountLabel(unreadCount);
         }
         conversationViewModel.clearUnreadStatus(conversation);
+
+        ongoingCalls = null;
 
         setTitle();
     }
@@ -536,7 +682,6 @@ public class ConversationFragment extends Fragment implements
     }
 
     private void joinChatRoom() {
-        chatRoomViewModel = ViewModelProviders.of(this).get(ChatRoomViewModel.class);
         chatRoomViewModel.joinChatRoom(conversation.target)
             .observe(this, new Observer<OperateResult<Boolean>>() {
                 @Override
@@ -574,12 +719,14 @@ public class ConversationFragment extends Fragment implements
         } else {
             content.tip = String.format(welcome, "<" + userId + ">");
         }
-        messageViewModel.sendMessage(conversation, content);
-        chatRoomViewModel.quitChatRoom(conversation.target);
+        Message message = new Message();
+        message.conversation = conversation;
+        message.content = content;
+        messageViewModel.sendMessageEx(message).observe(this, voidOperateResult -> chatRoomViewModel.quitChatRoom(conversation.target));
     }
 
     private void setChatRoomConversationTitle() {
-        chatRoomViewModel.getChatRoomInfo(conversation.target, System.currentTimeMillis())
+        chatRoomViewModel.getChatRoomInfo(conversation.target, 0)
             .observe(this, chatRoomInfoOperateResult -> {
                 if (chatRoomInfoOperateResult.isSuccess()) {
                     ChatRoomInfo chatRoomInfo = chatRoomInfoOperateResult.getResult();
@@ -597,9 +744,17 @@ public class ConversationFragment extends Fragment implements
         if (conversation.type == Conversation.ConversationType.Single) {
             UserInfo userInfo = ChatManagerHolder.gChatManager.getUserInfo(conversation.target, false);
             conversationTitle = userViewModel.getUserDisplayName(userInfo);
+
+            UserOnlineState userOnlineState = ChatManager.Instance().getUserOnlineStateMap().get(userInfo.uid);
+            if (userOnlineState != null) {
+                String onlineDesc = userOnlineState.desc();
+                if (!TextUtils.isEmpty(onlineDesc)) {
+                    conversationTitle += " (" + onlineDesc + ")";
+                }
+            }
         } else if (conversation.type == Conversation.ConversationType.Group) {
             if (groupInfo != null) {
-                conversationTitle = groupInfo.name + "(" + groupInfo.memberCount + "人)";
+                conversationTitle = (!TextUtils.isEmpty(groupInfo.remark) ? groupInfo.remark : groupInfo.name) + "(" + groupInfo.memberCount + "人)";
             }
         } else if (conversation.type == Conversation.ConversationType.Channel) {
             ChannelViewModel channelViewModel = ViewModelProviders.of(this).get(ChannelViewModel.class);
@@ -616,7 +771,12 @@ public class ConversationFragment extends Fragment implements
                     conversationTitle += "@<" + channelPrivateChatUser + ">";
                 }
             }
+        } else if (conversation.type == Conversation.ConversationType.SecretChat) {
+            String userId = ChatManager.Instance().getSecretChatInfo(conversation.target).getUserId();
+            UserInfo userInfo = ChatManagerHolder.gChatManager.getUserInfo(userId, false);
+            conversationTitle = userViewModel.getUserDisplayName(userInfo);
         }
+
         setActivityTitle(conversationTitle);
     }
 
@@ -638,6 +798,13 @@ public class ConversationFragment extends Fragment implements
 
     @Override
     public void onPortraitClick(UserInfo userInfo) {
+        if (conversation.type == Conversation.ConversationType.Channel) {
+            Intent intent = new Intent(getActivity(), ChannelInfoActivity.class);
+            intent.putExtra("channelId", conversation.target);
+            startActivity(intent);
+            return;
+        }
+
         if (groupInfo != null && groupInfo.privateChat == 1) {
             boolean allowPrivateChat = false;
             GroupMember groupMember = groupViewModel.getGroupMember(groupInfo.target, userViewModel.getUserId());
@@ -694,7 +861,7 @@ public class ConversationFragment extends Fragment implements
                     spannableString = mentionAllSpannable();
                 } else {
                     String userId = data.getStringExtra("userId");
-                    UserInfo userInfo = userViewModel.getUserInfo(userId, false);
+                    UserInfo userInfo = userViewModel.getUserInfo(userId, this.groupInfo.target, false);
                     spannableString = mentionSpannable(userInfo);
                 }
                 int position = inputPanel.editText.getSelectionEnd();
@@ -715,7 +882,7 @@ public class ConversationFragment extends Fragment implements
     }
 
     private SpannableString mentionSpannable(UserInfo userInfo) {
-        String text = "@" + userInfo.displayName + " ";
+        String text = "@" + ChatManager.Instance().getGroupMemberDisplayName(userInfo) + " ";
         SpannableString spannableString = new SpannableString(text);
         spannableString.setSpan(new MentionSpan(userInfo.uid), 0, spannableString.length(), Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
         return spannableString;
@@ -735,20 +902,42 @@ public class ConversationFragment extends Fragment implements
             return;
         }
 
+        if ((conversation.type == Conversation.ConversationType.Single && !ChatManager.Instance().isMyFriend(conversation.target))
+            || conversation.type == Conversation.ConversationType.Group) {
+            userOnlineStateViewModel.unwatchOnlineState(conversation.type.getValue(), new String[]{conversation.target});
+        }
+
         if (conversation.type == Conversation.ConversationType.ChatRoom) {
-            quitChatRoom();
+            if (!isPreJoinedChatRoom) {
+                quitChatRoom();
+            }
+        } else if (conversation.type == Conversation.ConversationType.Channel) {
+            LeaveChannelChatMessageContent content = new LeaveChannelChatMessageContent();
+            messageViewModel.sendMessage(conversation, content);
         }
 
         messageViewModel.messageLiveData().removeObserver(messageLiveDataObserver);
         messageViewModel.messageUpdateLiveData().removeObserver(messageUpdateLiveDatObserver);
         messageViewModel.messageRemovedLiveData().removeObserver(messageRemovedLiveDataObserver);
-        messageViewModel.mediaUpdateLiveData().removeObserver(mediaUploadedLiveDataObserver);
         userViewModel.userInfoLiveData().removeObserver(userInfoUpdateLiveDataObserver);
         conversationViewModel.clearConversationMessageLiveData().removeObserver(clearConversationMessageObserver);
         settingViewModel.settingUpdatedLiveData().removeObserver(settingUpdateLiveDataObserver);
 
         unInitGroupObservers();
         inputPanel.onDestroy();
+
+        // 退出密聊时，清空相关临时文件
+        if (conversation.type == Conversation.ConversationType.SecretChat) {
+            List<UiMessage> messages = adapter.getMessages();
+            if (messages != null) {
+                for (UiMessage uiMsg : messages) {
+                    File file = DownloadManager.mediaMessageContentFile(uiMsg.message);
+                    if (file != null && file.exists()) {
+                        file.delete();
+                    }
+                }
+            }
+        }
     }
 
     boolean onBackPressed() {
@@ -783,18 +972,19 @@ public class ConversationFragment extends Fragment implements
     }
 
     private void loadMoreOldMessages() {
-        long fromMessageId = Long.MAX_VALUE;
-        long fromMessageUid = Long.MAX_VALUE;
-        if (adapter.getMessages() != null && !adapter.getMessages().isEmpty()) {
-            fromMessageId = adapter.getItem(0).message.messageId;
-            fromMessageUid = adapter.getItem(0).message.messageUid;
-        }
+        loadMoreOldMessages(false);
+    }
 
-        conversationViewModel.loadOldMessages(conversation, channelPrivateChatUser, fromMessageId, fromMessageUid, MESSAGE_LOAD_COUNT_PER_TIME)
+    private void loadMoreOldMessages(boolean scrollToBottom) {
+
+        conversationViewModel.loadOldMessages(conversation, channelPrivateChatUser, adapter.oldestMessageId, adapter.oldestMessageUid, MESSAGE_LOAD_COUNT_PER_TIME)
             .observe(this, uiMessages -> {
                 adapter.addMessagesAtHead(uiMessages);
 
                 swipeRefreshLayout.setRefreshing(false);
+                if (scrollToBottom) {
+                    recyclerView.scrollToPosition(adapter.getItemCount() - 1);
+                }
             });
     }
 
@@ -815,33 +1005,94 @@ public class ConversationFragment extends Fragment implements
             });
     }
 
-    private void updateTypingStatusTitle(TypingMessageContent typingMessageContent) {
+    private void updateTypingStatusTitle() {
+        if (this.typingMessageMap == null || this.conversation.type == Conversation.ConversationType.Channel || this.conversation.type == Conversation.ConversationType.ChatRoom) {
+            return;
+        }
+        this.checkUserTyping();
         String typingDesc = "";
-        switch (typingMessageContent.getTypingType()) {
-            case TypingMessageContent.TYPING_TEXT:
-                typingDesc = "对方正在输入";
-                break;
-            case TypingMessageContent.TYPING_VOICE:
-                typingDesc = "对方正在录音";
-                break;
-            case TypingMessageContent.TYPING_CAMERA:
-                typingDesc = "对方正在拍照";
-                break;
-            case TypingMessageContent.TYPING_FILE:
-                typingDesc = "对方正在发送文件";
-                break;
-            case TypingMessageContent.TYPING_LOCATION:
-                typingDesc = "对方正在发送位置";
-                break;
-            default:
-                typingDesc = "unknown";
-                break;
+        if (typingMessageMap.size() == 0) {
+            this.resetConversationTitle();
+            return;
+        } else if (typingMessageMap.size() == 1) {
+            Set<String> users = typingMessageMap.keySet();
+            String userId = users.toArray(new String[1])[0];
+            UserInfo userInfo;
+            if (conversation.type == Conversation.ConversationType.Group) {
+                userInfo = ChatManager.Instance().getUserInfo(userId, conversation.target, false);
+                String userName = "有人";
+                if (!TextUtils.isEmpty(userInfo.friendAlias)) {
+                    userName = userInfo.friendAlias;
+                } else if (!TextUtils.isEmpty(userInfo.groupAlias)) {
+                    userName = userInfo.groupAlias;
+                } else if (!TextUtils.isEmpty(userInfo.displayName)) {
+                    userName = userInfo.displayName;
+                }
+
+                TypingMessageContent typingMessageContent = (TypingMessageContent) typingMessageMap.get(userId).content;
+                switch (typingMessageContent.getTypingType()) {
+                    case TypingMessageContent.TYPING_TEXT:
+                        typingDesc = "正在输入";
+                        break;
+                    case TypingMessageContent.TYPING_VOICE:
+                        typingDesc = "正在录音";
+                        break;
+                    case TypingMessageContent.TYPING_CAMERA:
+                        typingDesc = "正在拍照";
+                        break;
+                    case TypingMessageContent.TYPING_FILE:
+                        typingDesc = "正在发送文件";
+                        break;
+                    case TypingMessageContent.TYPING_LOCATION:
+                        typingDesc = "正在发送位置";
+                        break;
+                    default:
+                        typingDesc = "unknown";
+                        break;
+                }
+                typingDesc = userName + " " + typingDesc;
+            } else {
+                TypingMessageContent typingMessageContent = (TypingMessageContent) typingMessageMap.get(userId).content;
+                switch (typingMessageContent.getTypingType()) {
+                    case TypingMessageContent.TYPING_TEXT:
+                        typingDesc = "对方正在输入";
+                        break;
+                    case TypingMessageContent.TYPING_VOICE:
+                        typingDesc = "对方正在录音";
+                        break;
+                    case TypingMessageContent.TYPING_CAMERA:
+                        typingDesc = "对方正在拍照";
+                        break;
+                    case TypingMessageContent.TYPING_FILE:
+                        typingDesc = "对方正在发送文件";
+                        break;
+                    case TypingMessageContent.TYPING_LOCATION:
+                        typingDesc = "对方正在发送位置";
+                        break;
+                    default:
+                        typingDesc = "unknown";
+                        break;
+                }
+            }
+        } else {
+            typingDesc = typingMessageMap.size() + "人正在输入";
         }
         setActivityTitle(typingDesc);
-        handler.postDelayed(resetConversationTitleRunnable, 5000);
+        handler.postDelayed(this::updateTypingStatusTitle, 5000);
     }
 
-    private Runnable resetConversationTitleRunnable = this::resetConversationTitle;
+    private void checkUserTyping() {
+        Set<Map.Entry<String, Message>> entries = typingMessageMap.entrySet();
+        Iterator<Map.Entry<String, Message>> iterator = entries.iterator();
+        long now = System.currentTimeMillis();
+        while (iterator.hasNext()) {
+            Map.Entry<String, Message> next = iterator.next();
+            Message msg = next.getValue();
+            if (now - msg.serverTime + ChatManager.Instance().getServerDeltaTime() > TYPING_INTERNAL) {
+                iterator.remove();
+            }
+        }
+    }
 
     private void resetConversationTitle() {
         if (getActivity() == null || getActivity().isFinishing()) {
@@ -849,7 +1100,6 @@ public class ConversationFragment extends Fragment implements
         }
         if (!TextUtils.equals(conversationTitle, getActivity().getTitle())) {
             setActivityTitle(conversationTitle);
-            handler.removeCallbacks(resetConversationTitleRunnable);
         }
     }
 
@@ -962,40 +1212,24 @@ public class ConversationFragment extends Fragment implements
     @Override
     public void onMessageReceiptCLick(Message message) {
         Map<String, Long> deliveries = adapter.getDeliveries();
-        Map<String, Long> readEntries = adapter.getReadEntries();
-        int deliveryCount = 0;
-        if (deliveries != null) {
-            for (Map.Entry<String, Long> delivery : deliveries.entrySet()) {
-                if (delivery.getValue() >= message.serverTime) {
-                    deliveryCount++;
-                }
+        Intent intent = new Intent(getActivity(), GroupMessageReceiptActivity.class);
+        intent.putExtra("message", message);
+        intent.putExtra("groupInfo", groupInfo);
+        startActivity(intent);
+    }
+
+    private void cleanExpiredOngoingCalls() {
+        for (Iterator<Map.Entry<String, Message>> it = ongoingCalls.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Message> entry = it.next();
+            if (System.currentTimeMillis() - (entry.getValue().serverTime + ChatManager.Instance().getServerDeltaTime()) > 3000) {
+                it.remove();
             }
         }
-        int readCount = 0;
-        if (readEntries != null) {
-            for (Map.Entry<String, Long> readEntry : readEntries.entrySet()) {
-                if (readEntry.getValue() >= message.serverTime) {
-                    readCount++;
-                }
-            }
+        if (ongoingCalls.size() > 0) {
+            handler.postDelayed(this::cleanExpiredOngoingCalls, 1000);
+        } else {
+            ongoingCallAdapter.setOngoingCalls(null);
+            ongoingCallRecyclerView.setVisibility(View.GONE);
         }
-        StringBuilder builder = new StringBuilder();
-        builder.append("已送达人数：")
-            .append(deliveryCount)
-            .append("\n")
-            .append("未送达人数：")
-            .append(groupInfo.memberCount - 1 - deliveryCount)
-            .append("\n")
-            .append("已读人数：")
-            .append(readCount)
-            .append("\n")
-            .append("未读人数：")
-            .append(groupInfo.memberCount - 1 - readCount)
-        ;
-        new MaterialDialog.Builder(getActivity())
-            .title("消息回执")
-            .content(builder.toString())
-            .build()
-            .show();
     }
 }

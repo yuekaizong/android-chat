@@ -5,12 +5,16 @@
 package cn.wildfire.chat.app.main;
 
 import android.Manifest;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Build;
 import android.text.TextUtils;
+import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.LinearLayout;
@@ -34,7 +38,10 @@ import com.king.zxing.Intents;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import butterknife.BindView;
 import cn.wildfire.chat.kit.Config;
@@ -44,10 +51,14 @@ import cn.wildfire.chat.kit.WfcBaseActivity;
 import cn.wildfire.chat.kit.WfcScheme;
 import cn.wildfire.chat.kit.WfcUIKit;
 import cn.wildfire.chat.kit.channel.ChannelInfoActivity;
+import cn.wildfire.chat.kit.contact.ContactListActivity;
 import cn.wildfire.chat.kit.contact.ContactListFragment;
 import cn.wildfire.chat.kit.contact.ContactViewModel;
 import cn.wildfire.chat.kit.contact.newfriend.SearchUserActivity;
+import cn.wildfire.chat.kit.conversation.ConversationActivity;
+import cn.wildfire.chat.kit.conversation.ConversationViewModel;
 import cn.wildfire.chat.kit.conversation.CreateConversationActivity;
+import cn.wildfire.chat.kit.conversation.forward.ForwardActivity;
 import cn.wildfire.chat.kit.conversationlist.ConversationListFragment;
 import cn.wildfire.chat.kit.conversationlist.ConversationListViewModel;
 import cn.wildfire.chat.kit.conversationlist.ConversationListViewModelFactory;
@@ -59,10 +70,15 @@ import cn.wildfire.chat.kit.user.ChangeMyNameActivity;
 import cn.wildfire.chat.kit.user.UserInfoActivity;
 import cn.wildfire.chat.kit.user.UserViewModel;
 import cn.wildfire.chat.kit.viewmodel.MessageViewModel;
+import cn.wildfire.chat.kit.voip.conference.ConferenceInfoActivity;
 import cn.wildfire.chat.kit.widget.ViewPagerFixed;
+import cn.wildfire.chat.kit.workspace.WebViewFragment;
 import cn.wildfirechat.chat.R;
 import cn.wildfirechat.client.ConnectionStatus;
+import cn.wildfirechat.message.LinkMessageContent;
 import cn.wildfirechat.message.Message;
+import cn.wildfirechat.message.MessageContent;
+import cn.wildfirechat.message.TextMessageContent;
 import cn.wildfirechat.message.core.MessageContentType;
 import cn.wildfirechat.message.core.MessageStatus;
 import cn.wildfirechat.model.Conversation;
@@ -88,6 +104,7 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
     private QBadgeView discoveryBadgeView;
 
     private static final int REQUEST_CODE_SCAN_QR_CODE = 100;
+    private static final int REQUEST_CODE_PICK_CONTACT = 101;
 
     private boolean isInitialized = false;
 
@@ -121,6 +138,9 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
     @Override
     protected void afterViews() {
         bottomNavigationView.setItemIconTintList(null);
+        if (TextUtils.isEmpty(Config.WORKSPACE_URL)) {
+            bottomNavigationView.getMenu().removeItem(R.id.workspace);
+        }
         IMServiceStatusViewModel imServiceStatusViewModel = ViewModelProviders.of(this).get(IMServiceStatusViewModel.class);
         imServiceStatusViewModel.imServiceStatusLiveData().observe(this, imStatusLiveDataObserver);
         IMConnectionStatusViewModel connectionStatusViewModel = ViewModelProviders.of(this).get(IMConnectionStatusViewModel.class);
@@ -141,6 +161,10 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
                         reLogin(true);
                     }
                 }
+            } else if(status == ConnectionStatus.ConnectionStatusNotLicensed) {
+                Toast.makeText(MainActivity.this, "专业版IM服务没有授权或者授权过期！！！", Toast.LENGTH_LONG).show();
+            } else if(status == ConnectionStatus.ConnectionStatusTimeInconsistent) {
+                Toast.makeText(MainActivity.this, "服务器和客户端时间相差太大！！！", Toast.LENGTH_LONG).show();
             }
         });
         MessageViewModel messageViewModel = ViewModelProviders.of(this).get(MessageViewModel.class);
@@ -150,6 +174,37 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
                 updateMomentBadgeView();
             }
         });
+
+        Intent intent = getIntent();
+        String action = intent.getAction();
+        String type = intent.getType();
+        if (Intent.ACTION_SEND.equals(action)) {
+            if ("text/plain".equals(type)) {
+                handleSend(intent);
+            }
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String action = intent.getAction();
+        String type = intent.getType();
+        if (Intent.ACTION_SEND.equals(action)) {
+            if ("text/plain".equals(type)) {
+                handleSend(intent);
+            }
+        }
+    }
+
+    @Override
+    protected void afterMenus(Menu menu) {
+        super.afterMenus(menu);
+        boolean isEnableSecretChat = ChatManager.Instance().isEnableSecretChat();
+        if (!isEnableSecretChat) {
+            MenuItem menuItem = menu.findItem(R.id.secretChat);
+            menuItem.setEnabled(false);
+        }
     }
 
     private void reLogin(boolean isKickedOff) {
@@ -163,7 +218,7 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
     private void init() {
         initView();
 
-        conversationListViewModel = new ViewModelProvider(this, new ConversationListViewModelFactory(Arrays.asList(Conversation.ConversationType.Single, Conversation.ConversationType.Group, Conversation.ConversationType.Channel), Arrays.asList(0)))
+        conversationListViewModel = new ViewModelProvider(this, new ConversationListViewModelFactory(Arrays.asList(Conversation.ConversationType.Single, Conversation.ConversationType.Group, Conversation.ConversationType.Channel, Conversation.ConversationType.SecretChat), Arrays.asList(0)))
             .get(ConversationListViewModel.class);
         conversationListViewModel.unreadCountLiveData().observe(this, unreadCount -> {
 
@@ -212,7 +267,8 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         if (count > 0) {
             if (discoveryBadgeView == null) {
                 BottomNavigationMenuView bottomNavigationMenuView = ((BottomNavigationMenuView) bottomNavigationView.getChildAt(0));
-                View view = bottomNavigationMenuView.getChildAt(2);
+                int index = TextUtils.isEmpty(Config.WORKSPACE_URL) ? 2 : 3;
+                View view = bottomNavigationMenuView.getChildAt(index);
                 discoveryBadgeView = new QBadgeView(MainActivity.this);
                 discoveryBadgeView.bindTarget(view);
             }
@@ -264,7 +320,7 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         contentLinearLayout.setVisibility(View.VISIBLE);
 
         //设置ViewPager的最大缓存页面
-        contentViewPager.setOffscreenPageLimit(3);
+        contentViewPager.setOffscreenPageLimit(4);
 
         ConversationListFragment conversationListFragment = new ConversationListFragment();
         contactListFragment = new ContactListFragment();
@@ -272,6 +328,10 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         MeFragment meFragment = new MeFragment();
         mFragmentList.add(conversationListFragment);
         mFragmentList.add(contactListFragment);
+        boolean showWorkSpace = !TextUtils.isEmpty(Config.WORKSPACE_URL);
+        if (showWorkSpace) {
+            mFragmentList.add(WebViewFragment.loadUrl(Config.WORKSPACE_URL));
+        }
         mFragmentList.add(discoveryFragment);
         mFragmentList.add(meFragment);
         contentViewPager.setAdapter(new HomeFragmentPagerAdapter(getSupportFragmentManager(), mFragmentList));
@@ -293,15 +353,22 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
                         setTitleBackgroundResource(R.color.gray5, false);
                     }
                     break;
-                case R.id.discovery:
+                case R.id.workspace:
                     contentViewPager.setCurrentItem(2, false);
+                    setTitle("工作台");
+                    if (!isDarkTheme()) {
+                        setTitleBackgroundResource(R.color.gray5, false);
+                    }
+                    break;
+                case R.id.discovery:
+                    contentViewPager.setCurrentItem(showWorkSpace ? 3 : 2, false);
                     setTitle("发现");
                     if (!isDarkTheme()) {
                         setTitleBackgroundResource(R.color.gray5, false);
                     }
                     break;
                 case R.id.me:
-                    contentViewPager.setCurrentItem(3, false);
+                    contentViewPager.setCurrentItem(showWorkSpace ? 4 : 3, false);
                     setTitle("我的");
                     if (!isDarkTheme()) {
                         setTitleBackgroundResource(R.color.white, false);
@@ -322,6 +389,9 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
                 break;
             case R.id.chat:
                 createConversation();
+                break;
+            case R.id.secretChat:
+                pickContactToCreateSecretConversation();
                 break;
             case R.id.add_contact:
                 searchUser();
@@ -351,6 +421,32 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         startActivity(intent);
     }
 
+    private void createSecretChat(String userId) {
+        ConversationViewModel conversationViewModel = ViewModelProviders.of(this).get(ConversationViewModel.class);
+        conversationViewModel.createSecretChat(userId).observeForever(stringOperateResult -> {
+            if (stringOperateResult.isSuccess()) {
+                Conversation conversation = new Conversation(Conversation.ConversationType.SecretChat, stringOperateResult.getResult().first, stringOperateResult.getResult().second);
+                Intent intent = new Intent(this, ConversationActivity.class);
+                intent.putExtra("conversation", conversation);
+                startActivity(intent);
+            } else {
+                if (stringOperateResult.getErrorCode() == 86) {
+                    //自己关闭了密聊功能
+                } else if (stringOperateResult.getErrorCode() == 87) {
+                    //对方关闭了密聊功能
+                } else {
+                    //提示网络错误
+                }
+            }
+        });
+    }
+
+    private void pickContactToCreateSecretConversation() {
+        Intent intent = new Intent(this, ContactListActivity.class);
+        intent.putExtra("showChannel", false);
+        startActivityForResult(intent, REQUEST_CODE_PICK_CONTACT);
+    }
+
     private void searchUser() {
         Intent intent = new Intent(this, SearchUserActivity.class);
         startActivity(intent);
@@ -362,6 +458,11 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
 
     @Override
     public void onPageSelected(int position) {
+        if (TextUtils.isEmpty(Config.WORKSPACE_URL)) {
+            if (position > 1) {
+                position++;
+            }
+        }
         switch (position) {
             case 0:
                 bottomNavigationView.setSelectedItemId(R.id.conversation_list);
@@ -370,9 +471,12 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
                 bottomNavigationView.setSelectedItemId(R.id.contact);
                 break;
             case 2:
-                bottomNavigationView.setSelectedItemId(R.id.discovery);
+                bottomNavigationView.setSelectedItemId(R.id.workspace);
                 break;
             case 3:
+                bottomNavigationView.setSelectedItemId(R.id.discovery);
+                break;
+            case 4:
                 bottomNavigationView.setSelectedItemId(R.id.me);
                 break;
             default:
@@ -393,11 +497,19 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        if (resultCode != RESULT_OK) {
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
         switch (requestCode) {
             case REQUEST_CODE_SCAN_QR_CODE:
-                if (resultCode == RESULT_OK) {
-                    String result = data.getStringExtra(Intents.Scan.RESULT);
-                    onScanPcQrCode(result);
+                String result = data.getStringExtra(Intents.Scan.RESULT);
+                onScanPcQrCode(result);
+                break;
+            case REQUEST_CODE_PICK_CONTACT:
+                UserInfo userInfo = data.getParcelableExtra("userInfo");
+                if (userInfo != null) {
+                    createSecretChat(userInfo.uid);
                 }
                 break;
             default:
@@ -415,9 +527,25 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         }
     }
 
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        Intent i = getBaseContext().getPackageManager().getLaunchIntentForPackage(
+            getBaseContext().getPackageName());
+        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(i);
+        finish();
+    }
+
     private void onScanPcQrCode(String qrcode) {
         String prefix = qrcode.substring(0, qrcode.lastIndexOf('/') + 1);
         String value = qrcode.substring(qrcode.lastIndexOf("/") + 1);
+        Uri uri = Uri.parse(qrcode);
+        Set<String> queryNames = uri.getQueryParameterNames();
+        Map<String, Object> params = new HashMap<>();
+        for (String query : queryNames) {
+            params.put(query, uri.getQueryParameter(query));
+        }
         switch (prefix) {
             case WfcScheme.QR_CODE_PREFIX_PC_SESSION:
                 pcLogin(value);
@@ -430,6 +558,9 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
                 break;
             case WfcScheme.QR_CODE_PREFIX_CHANNEL:
                 subscribeChannel(value);
+                break;
+            case WfcScheme.QR_CODE_PREFIX_CONFERENCE:
+                joinConference(value, params);
                 break;
             default:
                 Toast.makeText(this, "qrcode: " + qrcode, Toast.LENGTH_SHORT).show();
@@ -467,6 +598,13 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         startActivity(intent);
     }
 
+    private void joinConference(String conferenceId, Map<String, Object> params) {
+        Intent intent = new Intent(this, ConferenceInfoActivity.class);
+        intent.putExtra("conferenceId", conferenceId);
+        intent.putExtra("password", (String) params.get("pwd"));
+        startActivity(intent);
+    }
+
     private boolean checkDisplayName() {
         UserViewModel userViewModel = ViewModelProviders.of(this).get(UserViewModel.class);
         SharedPreferences sp = getSharedPreferences("wfc_config", Context.MODE_PRIVATE);
@@ -496,4 +634,63 @@ public class MainActivity extends WfcBaseActivity implements ViewPager.OnPageCha
         dialog.show();
     }
 
+    // 分享
+    private void handleSend(Intent intent) {
+        String sharedText = intent.getStringExtra(Intent.EXTRA_INTENT);
+        if (!TextUtils.isEmpty(sharedText)) {
+            MessageContent content = new TextMessageContent(sharedText);
+            shareMessage(content);
+        } else {
+            ClipData clipData = intent.getClipData();
+            if (clipData != null) {
+                int count = clipData.getItemCount();
+                if (count == 1) {
+                    ClipData.Item item = clipData.getItemAt(0);
+                    sharedText = (String) item.getText();
+
+                    if (isMiShare(sharedText)) {
+                        LinkMessageContent content = parseMiShare(sharedText);
+                        shareMessage(content);
+                    } else {
+                        MessageContent content = new TextMessageContent(sharedText);
+                        shareMessage(content);
+                    }
+                }
+            }
+        }
+    }
+
+    private void shareMessage(MessageContent content) {
+        ArrayList<Message> msgs = new ArrayList<>();
+        Message message = new Message();
+        message.content = content;
+        msgs.add(message);
+        Intent intent = new Intent(this, ForwardActivity.class);
+        intent.putExtra("messages", msgs);
+        startActivity(intent);
+    }
+
+    // 小米浏览器 我分享了【xxxx】, 快来看吧！@小米浏览器 | https://xxx
+    private boolean isMiShare(String text) {
+        if (TextUtils.isEmpty(text)) {
+            return false;
+        }
+
+        if (text.startsWith("我分享了【")
+            && text.indexOf("】, 快来看吧！@小米浏览器 | http") > 1) {
+            return true;
+        }
+        return false;
+    }
+
+    private LinkMessageContent parseMiShare(String text) {
+        LinkMessageContent content = new LinkMessageContent();
+        String title = text.substring(text.indexOf("【") + 1, text.indexOf("】"));
+        content.setTitle(title);
+        String desc = text.substring(0, text.indexOf("@小米浏览器"));
+        content.setContentDigest(desc);
+        String url = text.substring(text.indexOf("http"));
+        content.setUrl(url);
+        return content;
+    }
 }

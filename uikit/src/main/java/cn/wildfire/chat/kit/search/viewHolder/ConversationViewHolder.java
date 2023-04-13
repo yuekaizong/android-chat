@@ -4,6 +4,7 @@
 
 package cn.wildfire.chat.kit.search.viewHolder;
 
+import android.text.TextUtils;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -56,8 +57,8 @@ public class ConversationViewHolder extends ResultItemViewHolder<ConversationSea
         } else {
             GroupInfo groupInfo = groupViewModel.getGroupInfo(conversation.target, false);
             if (groupInfo != null) {
-                Glide.with(fragment).load(groupInfo.portrait).apply(new RequestOptions().placeholder(R.mipmap.ic_group_cheat).centerCrop()).into(portraitImageView);
-                nameTextView.setText(groupInfo.name);
+                Glide.with(fragment).load(groupInfo.portrait).apply(new RequestOptions().placeholder(R.mipmap.ic_group_chat).centerCrop()).into(portraitImageView);
+                nameTextView.setText(!TextUtils.isEmpty(groupInfo.remark) ? groupInfo.remark : groupInfo.name);
             }
         }
 

@@ -19,9 +19,9 @@ import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.media.AudioManager;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
@@ -44,6 +44,7 @@ import org.webrtc.StatsReport;
 
 import java.util.List;
 
+import cn.wildfire.chat.kit.R;
 import cn.wildfirechat.avenginekit.AVEngineKit;
 import cn.wildfirechat.client.NotInitializedExecption;
 import cn.wildfirechat.model.UserInfo;
@@ -89,17 +90,16 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
             wakeLock.acquire();
         }
 
-        //Todo 把标题栏改成黑色
-//        getWindow().addFlags(LayoutParams.FLAG_FULLSCREEN | LayoutParams.FLAG_KEEP_SCREEN_ON
-//            | LayoutParams.FLAG_SHOW_WHEN_LOCKED | LayoutParams.FLAG_TURN_SCREEN_ON);
-//        getWindow().getDecorView().setSystemUiVisibility(getSystemUiVisibility());
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            SharedPreferences sp = getSharedPreferences("wfc_kit_config", Context.MODE_PRIVATE);
+            boolean darkTheme = sp.getBoolean("darkTheme", true);
+
+            int toolbarBackgroundColorResId = darkTheme ? R.color.colorPrimary : R.color.gray5;
             Window window = getWindow();
             //设置修改状态栏
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
             //设置状态栏的颜色，和你的app主题或者标题栏颜色设置一致就ok了
-            window.setStatusBarColor(getResources().getColor(android.R.color.black));
+            window.setStatusBarColor(getResources().getColor(toolbarBackgroundColorResId));
         }
 
         try {
@@ -126,7 +126,6 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
             return;
         }
         session.setCallback(this);
-        setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);
     }
 
     @Override
@@ -235,9 +234,6 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
 
     @Override
     public void didCallEndWithReason(AVEngineKit.CallEndReason reason) {
-        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        audioManager.setMode(AudioManager.MODE_NORMAL);
-        audioManager.setSpeakerphoneOn(false);
         finishFadeout();
     }
 
@@ -268,17 +264,17 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
     }
 
     @Override
-    public void didParticipantJoined(String s) {
+    public void didParticipantJoined(String userId, boolean screenSharing) {
 
     }
 
     @Override
-    public void didParticipantConnected(String userId) {
+    public void didParticipantConnected(String userId, boolean screenSharing) {
 
     }
 
     @Override
-    public void didParticipantLeft(String s, AVEngineKit.CallEndReason callEndReason) {
+    public void didParticipantLeft(String userId, AVEngineKit.CallEndReason callEndReason, boolean screenSharing) {
 
     }
 
@@ -287,16 +283,16 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
     }
 
     @Override
-    public void didReceiveRemoteVideoTrack(String s) {
+    public void didReceiveRemoteVideoTrack(String userId, boolean screenSharing) {
     }
 
     @Override
-    public void didRemoveRemoteVideoTrack(String s) {
+    public void didRemoveRemoteVideoTrack(String userId) {
 
     }
 
     @Override
-    public void didMediaLostPacket(String media, int lostPacket) {
+    public void didMediaLostPacket(String media, int lostPacket, boolean screenSharing) {
         postAction(() -> {
             //发送方丢包超过6为网络不好
             if (lostPacket > 6) {
@@ -306,7 +302,7 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
     }
 
     @Override
-    public void didMediaLostPacket(String userId, String media, int lostPacket, boolean uplink) {
+    public void didMediaLostPacket(String userId, String media, int lostPacket, boolean uplink, boolean screenSharing) {
         postAction(() -> {
             //如果uplink ture对方网络不好，false您的网络不好
             //接受方丢包超过10为网络不好
@@ -380,11 +376,28 @@ public abstract class VoipBaseActivity extends FragmentActivity implements AVEng
         overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
     }
 
+    @Override
+    public void finish() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            super.finishAndRemoveTask();
+        } else {
+            super.finish();
+        }
+    }
+
     public void setFocusVideoUserId(String focusVideoUserId) {
         this.focusVideoUserId = focusVideoUserId;
     }
 
     public String getFocusVideoUserId() {
         return focusVideoUserId;
+    }
+
+    public static String participantKey(String userId, boolean screenSharing) {
+        if (screenSharing) {
+            return AVEngineKit.SCREEN_SHARING_ID_PREFIX + userId;
+        } else {
+            return userId;
+        }
     }
 }

@@ -19,6 +19,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import cn.wildfire.chat.kit.R;
+import cn.wildfirechat.message.SoundMessageContent;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.ptt.PTTClient;
 import cn.wildfirechat.ptt.TalkingCallback;
@@ -49,7 +50,6 @@ public class PttPanel implements View.OnTouchListener {
     public PttPanel(Context context) {
         this.context = context;
         this.handler = ChatManager.Instance().getMainHandler();
-        ;
     }
 
     /**
@@ -68,18 +68,22 @@ public class PttPanel implements View.OnTouchListener {
         this.soundPool = new SoundPool(1, AudioManager.STREAM_MUSIC, 0);
         this.startSoundId = this.soundPool.load(context, R.raw.ptt_begin, 1);
         this.stopSoundId = this.soundPool.load(context, R.raw.ptt_end, 1);
+
+        PTTClient.getInstance().setEnablePtt(conversation, true);
     }
 
     public void deattch() {
         if (rootView == null) {
             return;
         }
+        PTTClient.getInstance().setEnablePtt(conversation, false);
         rootView = null;
         button = null;
         this.conversation = null;
         this.soundPool.unload(this.startSoundId);
         this.soundPool.unload(this.stopSoundId);
         this.soundPool = null;
+        this.handler.removeCallbacks(this::tick);
     }
 
     @Override
@@ -95,9 +99,7 @@ public class PttPanel implements View.OnTouchListener {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 button.setBackgroundResource(R.drawable.shape_session_btn_voice_normal);
-                if (isTalking) {
-                    stopTalk();
-                }
+                stopTalk();
                 break;
             default:
                 break;
@@ -106,21 +108,26 @@ public class PttPanel implements View.OnTouchListener {
     }
 
     private void requestTalk() {
-        handler.removeCallbacks(this::hideTalking);
+        handler.removeCallbacks(this::tick);
         // TODO 开始、结束、失败，播放对应的声音提示
         PTTClient.getInstance().requestTalk(conversation, new TalkingCallback() {
             @Override
+            public int talkingPriority(Conversation conversation) {
+                return 0;
+            }
+
+            @Override
             public void onStartTalking(Conversation conversation) {
-                playSoundEffect(true);
-                showTalking();
                 startTime = System.currentTimeMillis();
                 isTalking = true;
+                playSoundEffect(true);
                 showTalking();
                 tick();
             }
 
             @Override
             public void onTalkingEnd(Conversation conversation, int reason) {
+                isTalking = false;
                 playSoundEffect(false);
                 stopTalk();
             }
@@ -135,6 +142,11 @@ public class PttPanel implements View.OnTouchListener {
             public void onAmplitudeUpdate(int averageAmplitude) {
                 updateVolume(averageAmplitude);
             }
+
+            @Override
+            public SoundMessageContent onCreateSoundMessageContent(String soundFilePath) {
+                return TalkingCallback.super.onCreateSoundMessageContent(soundFilePath);
+            }
         });
     }
 
@@ -143,18 +155,15 @@ public class PttPanel implements View.OnTouchListener {
     }
 
     private void playSoundEffect(boolean start) {
-        this.soundPool.play(start ? startSoundId : stopSoundId, 0.1f, 0.1f, 0, 0, 1);
+        if (this.soundPool != null) {
+            this.soundPool.play(start ? startSoundId : stopSoundId, 0.1f, 0.1f, 0, 0, 1);
+        }
     }
 
     private void stopTalk() {
-        if (!isTalking) {
-            return;
-        }
         PTTClient.getInstance().releaseTalking(conversation);
+        this.isTalking = false;
         hideTalking();
-
-        isTalking = false;
-
     }
 
     private void showTalking() {
@@ -225,7 +234,7 @@ public class PttPanel implements View.OnTouchListener {
     }
 
     private void updateVolume(int averageAmplitude) {
-        if (this.stateImageView == null){
+        if (conversation == null || this.stateImageView == null) {
             return;
         }
         int db = (averageAmplitude / 1000) % 8;

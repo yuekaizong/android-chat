@@ -29,6 +29,8 @@ import com.afollestad.materialdialogs.MaterialDialog;
 import com.bumptech.glide.load.resource.bitmap.CenterCrop;
 import com.bumptech.glide.load.resource.bitmap.RoundedCorners;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import butterknife.BindView;
@@ -51,6 +53,7 @@ import cn.wildfire.chat.kit.favorite.FavoriteItem;
 import cn.wildfire.chat.kit.group.GroupViewModel;
 import cn.wildfire.chat.kit.net.SimpleCallback;
 import cn.wildfire.chat.kit.user.UserViewModel;
+import cn.wildfirechat.message.ArticlesMessageContent;
 import cn.wildfirechat.message.CallStartMessageContent;
 import cn.wildfirechat.message.CompositeMessageContent;
 import cn.wildfirechat.message.FileMessageContent;
@@ -65,6 +68,7 @@ import cn.wildfirechat.message.core.ContentTag;
 import cn.wildfirechat.message.core.MessageDirection;
 import cn.wildfirechat.message.core.MessageStatus;
 import cn.wildfirechat.message.core.PersistFlag;
+import cn.wildfirechat.model.ChannelInfo;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.GroupInfo;
 import cn.wildfirechat.model.GroupMember;
@@ -109,8 +113,6 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
     @Override
     public void onBind(UiMessage message, int position) {
         super.onBind(message, position);
-        this.message = message;
-        this.position = position;
 
         setSenderAvatar(message.message);
         setSenderName(message.message);
@@ -189,8 +191,25 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
 
     @MessageContextMenuItem(tag = MessageContextMenuItemTags.TAG_DELETE, confirm = false, priority = 11)
     public void removeMessage(View itemView, UiMessage message) {
+
+        List<String> items = new ArrayList();
+        items.add("删除本地消息");
+        boolean isSuperGroup = false;
+        if (message.message.conversation.type == Conversation.ConversationType.Group) {
+            GroupInfo groupInfo = ChatManager.Instance().getGroupInfo(message.message.conversation.target, false);
+            if (groupInfo != null && groupInfo.superGroup == 1) {
+                isSuperGroup = true;
+            }
+        }
+        // 超级群组不支持远端删除
+        if ((message.message.conversation.type == Conversation.ConversationType.Group && !isSuperGroup) || message.message.conversation.type == Conversation.ConversationType.Single) {
+            items.add("删除远程消息");
+        } else if (message.message.conversation.type == Conversation.ConversationType.SecretChat) {
+            items.add("删除自己及对方消息");
+        }
+
         new MaterialDialog.Builder(fragment.getContext())
-            .items("删除本地消息", "删除远程消息")
+            .items(items)
             .itemsCallback(new MaterialDialog.ListCallback() {
                 @Override
                 public void onSelection(MaterialDialog dialog, View itemView, int position, CharSequence text) {
@@ -216,7 +235,7 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
         fragment.toggleMultiMessageMode(message);
     }
 
-    @MessageContextMenuItem(tag = MessageContextMenuItemTags.TAG_CHANEL_PRIVATE_CHAT, priority = 12)
+    @MessageContextMenuItem(tag = MessageContextMenuItemTags.TAG_CHANNEL_PRIVATE_CHAT, priority = 12)
     public void startChanelPrivateChat(View itemView, UiMessage message) {
         Intent intent = ConversationActivity.buildConversationIntent(fragment.getContext(), Conversation.ConversationType.Channel, message.message.conversation.target, message.message.conversation.line, message.message.sender);
         fragment.startActivity(intent);
@@ -235,12 +254,12 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
         appServiceProvider.addFavoriteItem(favoriteItem, new SimpleCallback<Void>() {
             @Override
             public void onUiSuccess(Void aVoid) {
-                Toast.makeText(fragment.getContext(), "fav ok", Toast.LENGTH_SHORT).show();
+                Toast.makeText(fragment.getContext(), "收藏成功", Toast.LENGTH_SHORT).show();
             }
 
             @Override
             public void onUiFailure(int code, String msg) {
-                Toast.makeText(fragment.getContext(), "fav error: " + code, Toast.LENGTH_SHORT).show();
+                Toast.makeText(fragment.getContext(), "收藏失败: " + code, Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -264,7 +283,7 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
             case MessageContextMenuItemTags.TAG_MULTI_CHECK:
                 title = "多选";
                 break;
-            case MessageContextMenuItemTags.TAG_CHANEL_PRIVATE_CHAT:
+            case MessageContextMenuItemTags.TAG_CHANNEL_PRIVATE_CHAT:
                 title = "私聊";
                 break;
             case MessageContextMenuItemTags.TAG_FAV:
@@ -292,6 +311,17 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
     @Override
     public boolean contextMenuItemFilter(UiMessage uiMessage, String tag) {
         Message message = uiMessage.message;
+
+        if (message.conversation.type == Conversation.ConversationType.SecretChat) {
+            if (MessageContextMenuItemTags.TAG_FORWARD.equals(tag)) {
+                return true;
+            }
+            if (MessageContextMenuItemTags.TAG_FAV.equals(tag)) {
+                return true;
+            }
+            return false;
+        }
+
         if (MessageContextMenuItemTags.TAG_RECALL.equals(tag)) {
             String userId = ChatManager.Instance().getUserId();
             if (message.conversation.type == Conversation.ConversationType.Group) {
@@ -319,7 +349,7 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
         }
 
         // 只有channel 主可以发起
-        if (MessageContextMenuItemTags.TAG_CHANEL_PRIVATE_CHAT.equals(tag)) {
+        if (MessageContextMenuItemTags.TAG_CHANNEL_PRIVATE_CHAT.equals(tag)) {
             if (uiMessage.message.conversation.type == Conversation.ConversationType.Channel
                 && uiMessage.message.direction == MessageDirection.Receive) {
                 return false;
@@ -340,7 +370,7 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
             return true;
         }
 
-        // 只有部分消息支持引用
+        // 只有部分消息支持收藏
         if (MessageContextMenuItemTags.TAG_FAV.equals(tag)) {
             MessageContent messageContent = message.content;
             if (messageContent instanceof TextMessageContent
@@ -348,6 +378,7 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
                 || messageContent instanceof CompositeMessageContent
                 || messageContent instanceof VideoMessageContent
                 || messageContent instanceof SoundMessageContent
+                || messageContent instanceof ArticlesMessageContent
                 || messageContent instanceof ImageMessageContent) {
                 return false;
             }
@@ -359,11 +390,22 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
 
     private void setSenderAvatar(Message item) {
         // TODO get user info from viewModel
-        UserInfo userInfo = ChatManagerHolder.gChatManager.getUserInfo(item.sender, false);
-        if (portraitImageView != null) {
+        String portraitUrl = null;
+        if (item.conversation.type == Conversation.ConversationType.Channel && item.direction == MessageDirection.Receive) {
+            ChannelInfo channelInfo = ChatManager.Instance().getChannelInfo(item.conversation.target, false);
+            if (channelInfo != null) {
+                portraitUrl = channelInfo.portrait;
+            }
+        } else {
+            UserInfo userInfo = ChatManagerHolder.gChatManager.getUserInfo(item.sender, false);
+            if (userInfo != null) {
+                portraitUrl = userInfo.portrait;
+            }
+        }
+        if (portraitImageView != null && portraitUrl != null) {
             GlideApp
                 .with(fragment)
-                .load(userInfo.portrait)
+                .load(portraitUrl)
                 .transforms(new CenterCrop(), new RoundedCorners(10))
                 .placeholder(R.mipmap.avatar_def)
                 .into(portraitImageView);
@@ -454,14 +496,14 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
                 } else {
                     groupReceiptFrameLayout.setVisibility(View.VISIBLE);
                 }
-                int deliveryCount = 0;
-                if (deliveries != null) {
-                    for (Map.Entry<String, Long> delivery : deliveries.entrySet()) {
-                        if (delivery.getValue() >= item.serverTime) {
-                            deliveryCount++;
-                        }
-                    }
-                }
+//                int deliveryCount = 0;
+//                if (deliveries != null) {
+//                    for (Map.Entry<String, Long> delivery : deliveries.entrySet()) {
+//                        if (delivery.getValue() >= item.serverTime) {
+//                            deliveryCount++;
+//                        }
+//                    }
+//                }
                 int readCount = 0;
                 if (readEntries != null) {
                     for (Map.Entry<String, Long> readEntry : readEntries.entrySet()) {
@@ -475,8 +517,8 @@ public abstract class NormalMessageContentViewHolder extends MessageContentViewH
                 if (groupInfo == null) {
                     return;
                 }
-                deliveryProgressBar.setMax(groupInfo.memberCount - 1);
-                deliveryProgressBar.setProgress(deliveryCount);
+//                deliveryProgressBar.setMax(groupInfo.memberCount - 1);
+//                deliveryProgressBar.setProgress(deliveryCount);
                 readProgressBar.setMax(groupInfo.memberCount - 1);
                 readProgressBar.setProgress(readCount);
             } else {

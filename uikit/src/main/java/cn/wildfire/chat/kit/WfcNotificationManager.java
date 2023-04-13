@@ -30,6 +30,7 @@ import cn.wildfirechat.message.Message;
 import cn.wildfirechat.message.core.MessageContentType;
 import cn.wildfirechat.message.core.MessageDirection;
 import cn.wildfirechat.message.notification.RecallMessageContent;
+import cn.wildfirechat.model.ChannelInfo;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.ConversationInfo;
 import cn.wildfirechat.model.GroupInfo;
@@ -151,14 +152,23 @@ public class WfcNotificationManager {
                 title = TextUtils.isEmpty(name) ? "新消息" : name;
             } else if (message.conversation.type == Conversation.ConversationType.Group) {
                 GroupInfo groupInfo = ChatManager.Instance().getGroupInfo(message.conversation.target, false);
-                title = groupInfo == null ? "群聊" : groupInfo.name;
+                title = groupInfo == null ? "群聊" : (!TextUtils.isEmpty(groupInfo.remark) ? groupInfo.remark : groupInfo.name);
+            } else if(message.conversation.type == Conversation.ConversationType.Channel) {
+                ChannelInfo channelInfo = ChatManager.Instance().getChannelInfo(message.conversation.target, false);
+                title = channelInfo == null ? "公众号新消息" : channelInfo.name;
             } else {
                 title = "新消息";
             }
             Intent mainIntent = new Intent(context.getPackageName() + ".main");
             Intent conversationIntent = new Intent(context, ConversationActivity.class);
             conversationIntent.putExtra("conversation", message.conversation);
-            PendingIntent pendingIntent = PendingIntent.getActivities(context, notificationId(message.messageUid), new Intent[]{mainIntent, conversationIntent}, PendingIntent.FLAG_UPDATE_CURRENT);
+
+            PendingIntent pendingIntent;
+            if (Build.VERSION.SDK_INT >= 23) {
+                pendingIntent = PendingIntent.getActivities(context, notificationId(message.messageUid), new Intent[]{mainIntent, conversationIntent}, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            } else {
+                pendingIntent = PendingIntent.getActivities(context, notificationId(message.messageUid), new Intent[]{mainIntent, conversationIntent}, PendingIntent.FLAG_UPDATE_CURRENT);
+            }
             String tag = "wfc notification tag";
             showNotification(context, tag, notificationId(message.messageUid), title, pushContent, pendingIntent);
         }

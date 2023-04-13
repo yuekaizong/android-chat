@@ -4,6 +4,7 @@
 
 package cn.wildfire.chat.kit.conversation;
 
+import android.os.Build;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,12 +28,14 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import cn.wildfire.chat.kit.R;
 import cn.wildfire.chat.kit.annotation.EnableContextMenu;
 import cn.wildfire.chat.kit.annotation.MessageContextMenuItem;
 import cn.wildfire.chat.kit.conversation.message.MessageItemView;
 import cn.wildfire.chat.kit.conversation.message.model.UiMessage;
+import cn.wildfire.chat.kit.conversation.message.viewholder.ContextableNotificationMessageContentViewHolder;
 import cn.wildfire.chat.kit.conversation.message.viewholder.LoadingViewHolder;
 import cn.wildfire.chat.kit.conversation.message.viewholder.MessageContentViewHolder;
 import cn.wildfire.chat.kit.conversation.message.viewholder.MessageViewHolderManager;
@@ -57,6 +60,9 @@ public class ConversationMessageAdapter extends RecyclerView.Adapter<RecyclerVie
     private OnMessageCheckListener onMessageCheckListener;
     private OnPortraitLongClickListener onPortraitLongClickListener;
     private OnMessageReceiptClickListener onMessageReceiptClickListener;
+
+    long oldestMessageUid = Long.MAX_VALUE;
+    long oldestMessageId = Long.MAX_VALUE;
 
     public ConversationMessageAdapter(ConversationFragment fragment) {
         super();
@@ -97,8 +103,25 @@ public class ConversationMessageAdapter extends RecyclerView.Adapter<RecyclerVie
     }
 
     public void setMessages(List<UiMessage> messages) {
-        this.messages = messages;
-        if (this.messages == null) {
+        if (messages != null && !messages.isEmpty()) {
+            oldestMessageUid = messages.get(0).message.messageUid;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                messages = messages.stream().filter(m -> m.message.messageId != 0).collect(Collectors.toList());
+                if (!messages.isEmpty()) {
+                    oldestMessageId = messages.get(0).message.messageId;
+                }
+                this.messages = messages;
+            } else {
+                for (UiMessage uiMsg : messages) {
+                    if (uiMsg.message.messageId != 0) {
+                        this.messages.add(uiMsg);
+                    }
+                }
+                if (!this.messages.isEmpty()) {
+                    oldestMessageId = this.messages.get(0).message.messageId;
+                }
+            }
+        } else {
             this.messages = new ArrayList<>();
         }
     }
@@ -154,6 +177,13 @@ public class ConversationMessageAdapter extends RecyclerView.Adapter<RecyclerVie
     public void addMessagesAtHead(List<UiMessage> newMessages) {
         if (newMessages == null || newMessages.isEmpty()) {
             return;
+        }
+        oldestMessageUid = newMessages.get(0).message.messageUid;
+        newMessages = newMessages.stream().filter(m -> m.message.messageId != 0).collect(Collectors.toList());
+        if (newMessages.isEmpty()) {
+            return;
+        } else {
+            oldestMessageId = newMessages.get(0).message.messageId;
         }
         this.messages.addAll(0, newMessages);
         notifyItemRangeInserted(0, newMessages.size());
@@ -212,6 +242,38 @@ public class ConversationMessageAdapter extends RecyclerView.Adapter<RecyclerVie
                     position = i;
                     break;
                 }
+            }
+        }
+        if (position >= 0) {
+            notifyItemRemoved(position);
+        }
+    }
+
+    public void removeMessageById(long messageId) {
+        int position = -1;
+        UiMessage msg;
+        for (int i = 0; i < messages.size(); i++) {
+            msg = messages.get(i);
+            if (msg.message.messageId == messageId) {
+                messages.remove(msg);
+                position = i;
+                break;
+            }
+        }
+        if (position >= 0) {
+            notifyItemRemoved(position);
+        }
+    }
+
+    public void removeMessageByUid(long messageUid) {
+        int position = -1;
+        UiMessage msg;
+        for (int i = 0; i < messages.size(); i++) {
+            msg = messages.get(i);
+            if (msg.message.messageUid == messageUid) {
+                messages.remove(msg);
+                position = i;
+                break;
             }
         }
         if (position >= 0) {
@@ -467,16 +529,19 @@ public class ConversationMessageAdapter extends RecyclerView.Adapter<RecyclerVie
             ((MessageContentViewHolder) holder).onBind(getItem(position), position);
             MessageItemView itemView = (MessageItemView) holder.itemView;
             CheckBox checkBox = itemView.findViewById(R.id.checkbox);
-            if (checkBox == null) {
-                return;
-            }
-            itemView.setCheckable(getMode() == MODE_CHECKABLE);
-            if (getMode() == MODE_CHECKABLE) {
-                checkBox.setVisibility(View.VISIBLE);
-                UiMessage message = getItem(position);
-                checkBox.setChecked(message.isChecked);
-            } else {
-                checkBox.setVisibility(View.GONE);
+            if (checkBox != null) {
+                if (holder instanceof NotificationMessageContentViewHolder && !(holder instanceof ContextableNotificationMessageContentViewHolder)) {
+                    checkBox.setVisibility(View.GONE);
+                } else {
+                    itemView.setCheckable(getMode() == MODE_CHECKABLE);
+                    if (getMode() == MODE_CHECKABLE) {
+                        checkBox.setVisibility(View.VISIBLE);
+                        UiMessage message = getItem(position);
+                        checkBox.setChecked(message.isChecked);
+                    } else {
+                        checkBox.setVisibility(View.GONE);
+                    }
+                }
             }
 
             if (getMode() == MODE_CHECKABLE) {

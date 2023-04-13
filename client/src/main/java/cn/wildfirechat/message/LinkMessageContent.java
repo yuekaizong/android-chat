@@ -4,20 +4,18 @@
 
 package cn.wildfirechat.message;
 
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
+
+import static cn.wildfirechat.message.core.MessageContentType.ContentType_Link;
+
 import android.os.Parcel;
+import android.text.TextUtils;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-
 import cn.wildfirechat.message.core.ContentTag;
 import cn.wildfirechat.message.core.MessagePayload;
 import cn.wildfirechat.message.core.PersistFlag;
-
-import static cn.wildfirechat.message.core.MessageContentType.ContentType_Link;
 
 /**
  * Created by heavyrain lee on 2017/12/6.
@@ -33,8 +31,9 @@ public class LinkMessageContent extends MessageContent {
     public LinkMessageContent() {
     }
 
-    public LinkMessageContent(String contentDigest) {
-        this.contentDigest = contentDigest;
+    public LinkMessageContent(String title, String url) {
+        this.title = title;
+        this.url = url;
     }
 
     public String getContentDigest() {
@@ -98,7 +97,7 @@ public class LinkMessageContent extends MessageContent {
         try {
             if (payload.content != null) {
                 JSONObject jsonObject = new JSONObject(new String(payload.binaryContent));
-                contentDigest = jsonObject.optString("c");
+                contentDigest = jsonObject.optString("d");
                 url = jsonObject.optString("u");
                 thumbnailUrl = jsonObject.optString("t");
             }
@@ -109,7 +108,7 @@ public class LinkMessageContent extends MessageContent {
 
     @Override
     public String digest(Message message) {
-        return contentDigest;
+        return !TextUtils.isEmpty(title) ? title : (!TextUtils.isEmpty(contentDigest) ? contentDigest : url);
     }
 
     @Override

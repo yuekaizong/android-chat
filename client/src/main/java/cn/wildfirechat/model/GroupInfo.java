@@ -19,7 +19,9 @@ public class GroupInfo implements Parcelable {
         //every member can add quit change group name and portrait, no one can kickoff others
         Free(1),
         //member can only quit, owner can do all the operations
-        Restricted(2);
+        Restricted(2),
+        //member can do nothing, server api manage the group.
+        Organization(3);
 
         private int value;
 
@@ -47,6 +49,7 @@ public class GroupInfo implements Parcelable {
     public GroupType type;
     public int memberCount;
     public String extra;
+    public String remark;
     public long updateDt;
 
 
@@ -59,14 +62,17 @@ public class GroupInfo implements Parcelable {
     //是否运行群中普通成员私聊。0 允许，1不允许
     public int privateChat;
 
-    //是否可以搜索到该群，功能暂未实现
+    //是否可以搜索到该群，0 群可以被搜索到；1 群不会被搜索到
     public int searchable;
 
-    //是否可以查看群历史消息, 0 不允许，1允许。仅专业版有效
+    //群成员是否可以加载加入之前的历史消息，0 不可以；1可以。仅专业版有效
     public int historyMessage;
 
     //群最大成员数。仅专业版有效
     public int maxMemberCount;
+
+    //群成员私聊状态，0 普通群组；1 超级群组。超级群组不支持服务器端删除。
+    public int superGroup;
 
     public GroupInfo() {
     }
@@ -86,6 +92,7 @@ public class GroupInfo implements Parcelable {
         dest.writeInt(this.type == null ? -1 : this.type.ordinal());
         dest.writeInt(this.memberCount);
         dest.writeString(this.extra);
+        dest.writeString(this.remark);
         dest.writeLong(this.updateDt);
         dest.writeInt(this.mute);
         dest.writeInt(this.joinType);
@@ -93,6 +100,7 @@ public class GroupInfo implements Parcelable {
         dest.writeInt(this.searchable);
         dest.writeInt(this.historyMessage);
         dest.writeInt(this.maxMemberCount);
+        dest.writeInt(this.superGroup);
     }
 
     protected GroupInfo(Parcel in) {
@@ -104,6 +112,7 @@ public class GroupInfo implements Parcelable {
         this.type = tmpType == -1 ? null : GroupType.values()[tmpType];
         this.memberCount = in.readInt();
         this.extra = in.readString();
+        this.remark = in.readString();
         this.updateDt = in.readLong();
         this.mute = in.readInt();
         this.joinType = in.readInt();
@@ -111,6 +120,7 @@ public class GroupInfo implements Parcelable {
         this.searchable = in.readInt();
         this.historyMessage = in.readInt();
         this.maxMemberCount = in.readInt();
+        this.superGroup = in.readInt();
     }
 
     public static final Creator<GroupInfo> CREATOR = new Creator<GroupInfo>() {

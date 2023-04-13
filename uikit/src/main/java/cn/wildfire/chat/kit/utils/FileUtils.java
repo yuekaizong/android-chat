@@ -5,6 +5,8 @@
 package cn.wildfire.chat.kit.utils;
 
 import android.annotation.TargetApi;
+import android.app.Activity;
+import android.content.ComponentName;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
@@ -18,6 +20,7 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Log;
 import android.webkit.MimeTypeMap;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -32,11 +35,16 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.FileChannel;
 import java.text.DecimalFormat;
 import java.util.Comparator;
 
 import cn.wildfire.chat.kit.BuildConfig;
 import cn.wildfire.chat.kit.R;
+import cn.wildfirechat.message.FileMessageContent;
+import cn.wildfirechat.message.Message;
+import cn.wildfirechat.model.Conversation;
+import cn.wildfirechat.remote.ChatManager;
 import okhttp3.ResponseBody;
 
 public class FileUtils {
@@ -275,23 +283,28 @@ public class FileUtils {
      * @see #getFile(Context, Uri)
      */
     public static String getPath(final Context context, final Uri uri) {
-        String absolutePath = getLocalPath(context, uri);
-
-        if (absolutePath == null) {
-            File tmpDri = context.getExternalCacheDir();
-            Cursor cursor =
-                context.getContentResolver().query(uri, null, null, null, null);
-            int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-            cursor.moveToFirst();
-            String fileName = cursor.getString(nameIndex);
-            cursor.close();
-            File tmpFile = new File(tmpDri, fileName);
-            if (copyFile(context, uri, tmpFile)) {
-                absolutePath = tmpFile.getAbsolutePath();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            String absolutePath = getLocalPath(context, uri);
+            if (absolutePath != null) {
+                File file = new File(absolutePath);
+                if (file.exists() && file.canRead()) {
+                    return absolutePath;
+                }
             }
         }
+        File tmpDri = context.getExternalCacheDir();
+        Cursor cursor =
+            context.getContentResolver().query(uri, null, null, null, null);
+        int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+        cursor.moveToFirst();
+        String fileName = cursor.getString(nameIndex);
+        cursor.close();
+        File tmpFile = new File(tmpDri, fileName);
+        if (copyFile(context, uri, tmpFile)) {
+            return tmpFile.getAbsolutePath();
+        }
 
-        return absolutePath;
+        return null;
     }
 
     public static long getSize(final Context context, final Uri uri) {
@@ -304,15 +317,37 @@ public class FileUtils {
         return size;
     }
 
+    public static boolean copyFile(File srcFile, File dstFile) {
+        try (
+            FileInputStream inputStream = new FileInputStream(srcFile);
+            FileChannel src = inputStream.getChannel();
+            FileChannel dst = new FileOutputStream(dstFile).getChannel();
+        ) {
+            dst.transferFrom(src, 0, src.size());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+        return true;
+    }
+
 
     private static boolean copyFile(Context context, Uri srcUri, File dstFile) {
         try {
             InputStream inputStream = context.getContentResolver().openInputStream(srcUri);
             if (inputStream == null) return false;
-            OutputStream outputStream = new FileOutputStream(dstFile);
-            copyStream(inputStream, outputStream);
-            inputStream.close();
-            outputStream.close();
+            if (inputStream instanceof FileInputStream) {
+                FileChannel src = ((FileInputStream) inputStream).getChannel();
+                FileChannel dst = new FileOutputStream(dstFile).getChannel();
+                dst.transferFrom(src, 0, src.size());
+                src.close();
+                dst.close();
+            } else {
+                OutputStream outputStream = new FileOutputStream(dstFile);
+                copyStream(inputStream, outputStream);
+                inputStream.close();
+                outputStream.close();
+            }
         } catch (Exception e) {
             e.printStackTrace();
             return false;
@@ -760,6 +795,27 @@ public class FileUtils {
 
     }
 
+    public static void writeBytesToFile(byte[] bytes, File file) {
+        OutputStream outputStream = null;
+        try {
+            outputStream = new FileOutputStream(file);
+            outputStream.write(bytes, 0, bytes.length);
+
+            outputStream.flush();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (outputStream != null) {
+                try {
+                    outputStream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
     public static File createTempImageFile(Context context, String fileName) throws IOException {
         // Create an image file name
         File storageDir = new File(context.getCacheDir(), DOCUMENTS_DIR);
@@ -843,5 +899,68 @@ public class FileUtils {
             return R.mipmap.ic_file_type_unknown;
         }
     }
+
+    public static boolean isFileExists(String path) {
+        File file = new File(path);
+        return file.exists();
+    }
+
+    public static void openFile(Context context, Message message) {
+        if (context == null || message == null) {
+            return;
+        }
+
+        File file = DownloadManager.mediaMessageContentFile(message);
+        if (file == null) {
+            return;
+        }
+        ChatManager.Instance().setMediaMessagePlayed(message.messageId);
+
+        if (file.exists()) {
+            Intent intent = FileUtils.getViewIntent(context, file);
+            try {
+                context.startActivity(intent);
+            } catch (Exception e) {
+                Toast.makeText(context, "找不到能打开此文件的应用", Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            String fileUrl;
+            if (message.conversation.type == Conversation.ConversationType.SecretChat) {
+                fileUrl = DownloadManager.buildSecretChatMediaUrl(message);
+            } else {
+                fileUrl = ((FileMessageContent) message.content).remoteUrl;
+            }
+            DownloadManager.download(fileUrl, file.getParent(), file.getName(), new DownloadManager.OnDownloadListener() {
+                @Override
+                public void onSuccess(File file) {
+                    if (context instanceof Activity) {
+                        if (((Activity) context).isFinishing()) {
+                            return;
+                        }
+                    }
+                    Intent intent = FileUtils.getViewIntent(context, file);
+                    ComponentName cn = intent.resolveActivity(context.getPackageManager());
+                    if (cn == null) {
+                        ChatManager.Instance().getMainHandler().post(() -> {
+                            Toast.makeText(context, "找不到能打开此文件的应用", Toast.LENGTH_SHORT).show();
+                        });
+                        return;
+                    }
+                    context.startActivity(intent);
+                }
+
+                @Override
+                public void onProgress(int progress) {
+
+                }
+
+                @Override
+                public void onFail() {
+
+                }
+            });
+        }
+    }
+
 }
 

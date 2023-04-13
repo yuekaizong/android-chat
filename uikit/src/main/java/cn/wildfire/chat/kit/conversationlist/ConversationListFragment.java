@@ -39,12 +39,15 @@ public class ConversationListFragment extends ProgressFragment {
     private ConversationListAdapter adapter;
     private static final List<Conversation.ConversationType> types = Arrays.asList(Conversation.ConversationType.Single,
         Conversation.ConversationType.Group,
-        Conversation.ConversationType.Channel);
+        Conversation.ConversationType.Channel,
+        Conversation.ConversationType.SecretChat);
     private static final List<Integer> lines = Arrays.asList(0);
 
     private ConversationListViewModel conversationListViewModel;
     private SettingViewModel settingViewModel;
+    private StatusNotificationViewModel statusNotificationViewModel;
     private LinearLayoutManager layoutManager;
+    private OnClickConversationItemListener onClickConversationItemListener;
 
     @Override
     protected int contentLayout() {
@@ -65,15 +68,25 @@ public class ConversationListFragment extends ProgressFragment {
         }
     }
 
+    public void setOnClickConversationItemListener(OnClickConversationItemListener listener) {
+        this.onClickConversationItemListener = listener;
+        if (adapter != null) {
+            adapter.setOnClickConversationItemListener(listener);
+        }
+    }
+
     @Override
     public void onResume() {
         super.onResume();
-        reloadConversations();
+//        reloadConversations();
     }
 
     private void init() {
         adapter = new ConversationListAdapter(this);
-        conversationListViewModel = new ViewModelProvider(getActivity(), new ConversationListViewModelFactory(types, lines))
+        if (onClickConversationItemListener != null) {
+            adapter.setOnClickConversationItemListener(onClickConversationItemListener);
+        }
+        conversationListViewModel = new ViewModelProvider(this, new ConversationListViewModelFactory(types, lines))
             .get(ConversationListViewModel.class);
         conversationListViewModel.conversationListLiveData().observe(this, conversationInfos -> {
             showContent();
@@ -104,7 +117,7 @@ public class ConversationListFragment extends ProgressFragment {
             }
         });
 
-        StatusNotificationViewModel statusNotificationViewModel = WfcUIKit.getAppScopeViewModel(StatusNotificationViewModel.class);
+        statusNotificationViewModel = WfcUIKit.getAppScopeViewModel(StatusNotificationViewModel.class);
         statusNotificationViewModel.statusNotificationLiveData().observe(this, new Observer<Object>() {
             @Override
             public void onChanged(Object o) {
@@ -124,6 +137,7 @@ public class ConversationListFragment extends ProgressFragment {
                     break;
                 case ConnectionStatus.ConnectionStatusConnected:
                     statusNotificationViewModel.hideStatusNotification(connectionStatusNotification);
+                    loadAndShowPCOnlineNotification();
                     break;
                 case ConnectionStatus.ConnectionStatusUnconnected:
                     connectionStatusNotification.setValue("连接失败");
@@ -141,18 +155,15 @@ public class ConversationListFragment extends ProgressFragment {
             conversationListViewModel.reloadConversationList(true);
             conversationListViewModel.reloadConversationUnreadStatus();
 
-            List<PCOnlineInfo> infos = ChatManager.Instance().getPCOnlineInfos();
-            statusNotificationViewModel.clearStatusNotificationByType(PCOnlineStatusNotification.class);
-            if (infos.size() > 0) {
-                for (PCOnlineInfo info : infos) {
-                    PCOnlineStatusNotification notification = new PCOnlineStatusNotification(info);
-                    statusNotificationViewModel.showStatusNotification(notification);
-
-                    SharedPreferences sp = getActivity().getSharedPreferences("wfc_kit_config", Context.MODE_PRIVATE);
-                    sp.edit().putBoolean("wfc_uikit_had_pc_session", true).commit();
-                }
-            }
+            loadAndShowPCOnlineNotification();
         });
+
+        if (ChatManager.Instance().getConnectionStatus() == ConnectionStatus.ConnectionStatusConnected) {
+            loadAndShowPCOnlineNotification();
+        }
+    }
+
+    private void loadAndShowPCOnlineNotification() {
         List<PCOnlineInfo> pcOnlineInfos = ChatManager.Instance().getPCOnlineInfos();
         if (pcOnlineInfos != null && !pcOnlineInfos.isEmpty()) {
             for (PCOnlineInfo info : pcOnlineInfos) {

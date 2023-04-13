@@ -4,9 +4,12 @@
 
 package cn.wildfire.chat.kit.viewmodel;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.Pair;
 
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
@@ -16,7 +19,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import cn.wildfire.chat.kit.Config;
 import cn.wildfire.chat.kit.WfcUIKit;
 import cn.wildfire.chat.kit.audio.AudioPlayManager;
 import cn.wildfire.chat.kit.audio.IAudioPlayListener;
@@ -26,6 +28,7 @@ import cn.wildfire.chat.kit.conversation.message.viewholder.AudioMessageContentV
 import cn.wildfire.chat.kit.third.location.data.LocationData;
 import cn.wildfire.chat.kit.third.utils.UIUtils;
 import cn.wildfire.chat.kit.utils.DownloadManager;
+import cn.wildfire.chat.kit.utils.FileUtils;
 import cn.wildfirechat.message.FileMessageContent;
 import cn.wildfirechat.message.ImageMessageContent;
 import cn.wildfirechat.message.LocationMessageContent;
@@ -42,6 +45,7 @@ import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.ReadEntry;
 import cn.wildfirechat.remote.ChatManager;
 import cn.wildfirechat.remote.GeneralCallback;
+import cn.wildfirechat.remote.GeneralCallbackBytes;
 import cn.wildfirechat.remote.OnClearMessageListener;
 import cn.wildfirechat.remote.OnDeleteMessageListener;
 import cn.wildfirechat.remote.OnMessageDeliverListener;
@@ -50,6 +54,8 @@ import cn.wildfirechat.remote.OnMessageUpdateListener;
 import cn.wildfirechat.remote.OnRecallMessageListener;
 import cn.wildfirechat.remote.OnReceiveMessageListener;
 import cn.wildfirechat.remote.OnSendMessageListener;
+import cn.wildfirechat.remote.SecretMessageBurnStateListener;
+import cn.wildfirechat.remote.SendMessageCallback;
 
 public class MessageViewModel extends ViewModel implements OnReceiveMessageListener,
     OnSendMessageListener,
@@ -58,7 +64,8 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
     OnMessageUpdateListener,
     OnMessageDeliverListener,
     OnMessageReadListener,
-    OnClearMessageListener {
+    OnClearMessageListener,
+    SecretMessageBurnStateListener {
     private MutableLiveData<UiMessage> messageLiveData;
     private MutableLiveData<UiMessage> messageUpdateLiveData;
     private MutableLiveData<UiMessage> messageRemovedLiveData;
@@ -66,6 +73,8 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
     private MutableLiveData<Object> clearMessageLiveData;
     private MutableLiveData<Map<String, Long>> messageDeliverLiveData;
     private MutableLiveData<List<ReadEntry>> messageReadLiveData;
+    private MutableLiveData<Pair<String, Long>> messageStartBurnLiveData;
+    private MutableLiveData<List<Long>> messageBurnedLiveData;
 
     private Message toPlayAudioMessage;
 
@@ -77,6 +86,8 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
         ChatManager.Instance().addClearMessageListener(this);
         ChatManager.Instance().addMessageDeliverListener(this);
         ChatManager.Instance().addMessageReadListener(this);
+        ChatManager.Instance().addSecretMessageBurnStateListener(this);
+        ChatManager.Instance().addDeleteMessageListener(this);
     }
 
     @Override
@@ -88,6 +99,8 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
         ChatManager.Instance().removeClearMessageListener(this);
         ChatManager.Instance().removeMessageDeliverListener(this);
         ChatManager.Instance().removeMessageReadListener(this);
+        ChatManager.Instance().removeSecretMessageBurnStateListener(this);
+        ChatManager.Instance().removeDeleteMessageListener(this);
     }
 
     @Override
@@ -148,6 +161,19 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
         return messageReadLiveData;
     }
 
+    public MutableLiveData<Pair<String, Long>> messageStartBurnLiveData() {
+        if (messageStartBurnLiveData == null) {
+            messageStartBurnLiveData = new MutableLiveData<>();
+        }
+        return messageStartBurnLiveData;
+    }
+
+    public MutableLiveData<List<Long>> messageBurnedLiveData() {
+        if (messageBurnedLiveData == null) {
+            messageBurnedLiveData = new MutableLiveData<>();
+        }
+        return messageBurnedLiveData;
+    }
 
     @Override
     public void onRecallMessage(Message message) {
@@ -171,7 +197,7 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
             @Override
             public void onSuccess() {
                 Message msg = message;
-                if(message.messageId > 0) {
+                if (message.messageId > 0) {
                     msg = ChatManager.Instance().getMessage(message.messageId);
                 }
                 postMessageUpdate(new UiMessage(msg));
@@ -237,7 +263,7 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
             ChatManager.Instance().setMediaMessagePlayed(message.message.messageId);
         }
 
-        File file = mediaMessageContentFile(message.message);
+        File file = DownloadManager.mediaMessageContentFile(message.message);
 
         if (file == null) {
             return;
@@ -264,10 +290,25 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
         sendMessage(msg);
     }
 
-    public MutableLiveData<OperateResult<Boolean>> sendMessageEx(Message message) {
+    public MutableLiveData<OperateResult<Void>> sendMessageEx(Message message) {
+        MutableLiveData<OperateResult<Void>> result = new MutableLiveData<>();
+        ChatManager.Instance().sendMessage(message, 0, new SendMessageCallback() {
+            @Override
+            public void onSuccess(long messageUid, long timestamp) {
+                result.setValue(new OperateResult<>(0));
+            }
 
-        // TODO
-        return null;
+            @Override
+            public void onFail(int errorCode) {
+                result.setValue(new OperateResult<>(-1));
+            }
+
+            @Override
+            public void onPrepare(long messageId, long savedTime) {
+
+            }
+        });
+        return result;
     }
 
     public void sendMessage(Message message) {
@@ -350,7 +391,7 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
 
     private void playAudio(UiMessage message, File file) {
         Uri uri = Uri.fromFile(file);
-        AudioPlayManager.getInstance().startPlay(WfcUIKit.getWfcUIKit().getApplication(), uri, new IAudioPlayListener() {
+        IAudioPlayListener audioPlayListener = new IAudioPlayListener() {
             @Override
             public void onStart(Uri var1) {
                 if (uri.equals(var1)) {
@@ -376,40 +417,26 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
                     postMessageUpdate(message);
                 }
             }
-        });
-    }
+        };
 
-    public File mediaMessageContentFile(Message message) {
+        if (message.message.conversation.type == Conversation.ConversationType.SecretChat) {
+            byte[] encryptedBytes = FileUtils.readBytesFromFile(file.getAbsolutePath());
+            ChatManager.Instance().decodeSecretDataAsync(message.message.conversation.target, encryptedBytes, new GeneralCallbackBytes() {
+                @Override
+                public void onSuccess(byte[] data) {
+                    AudioPlayManager.getInstance().startPlay(WfcUIKit.getWfcUIKit().getApplication(), uri, data, audioPlayListener);
+                }
 
-        String dir = null;
-        String name = null;
-        MessageContent content = message.content;
-        if (!(content instanceof MediaMessageContent)) {
-            return null;
-        }
-        if (!TextUtils.isEmpty(((MediaMessageContent) content).localPath)) {
-            return new File(((MediaMessageContent) content).localPath);
-        }
+                @Override
+                public void onFail(int errorCode) {
+                    message.isDownloading = false;
+                    Log.d("MessageVideModel", "decodeSecretDataAsync error " + errorCode);
+                }
+            });
 
-        switch (((MediaMessageContent) content).mediaType) {
-            case VOICE:
-                name = message.messageUid + ".mp3";
-                dir = Config.AUDIO_SAVE_DIR;
-                break;
-            case FILE:
-                name = message.messageUid + "-" + ((FileMessageContent) message.content).getName();
-                dir = Config.FILE_SAVE_DIR;
-                break;
-            case VIDEO:
-                name = message.messageUid + ".mp4";
-                dir = Config.VIDEO_SAVE_DIR;
-                break;
-            default:
+        } else {
+            AudioPlayManager.getInstance().startPlay(WfcUIKit.getWfcUIKit().getApplication(), uri, audioPlayListener);
         }
-        if (TextUtils.isEmpty(dir) || TextUtils.isEmpty(name)) {
-            return null;
-        }
-        return new File(dir, name);
     }
 
     public void downloadMedia(UiMessage message, File targetFile) {
@@ -424,11 +451,9 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
         message.isDownloading = true;
         postMessageUpdate(message);
 
-        DownloadManager.download(((MediaMessageContent) content).remoteUrl, targetFile.getParent(), targetFile.getName() + ".tmp", new DownloadManager.OnDownloadListener() {
+        DownloadManager.download(((MediaMessageContent) content).remoteUrl, targetFile.getParent(), targetFile.getName(), new DownloadManager.OnDownloadListener() {
             @Override
             public void onSuccess(File file) {
-                file.renameTo(targetFile);
-
                 message.isDownloading = false;
                 message.progress = 100;
                 postMessageUpdate(message);
@@ -492,6 +517,18 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
 
     @Override
     public void onMediaUpload(Message message, String remoteUrl) {
+        String key;
+        MediaMessageContent content = (MediaMessageContent) message.content;
+        if (message.conversation.type == Conversation.ConversationType.SecretChat) {
+            key = message.conversation.target + "_" + content.localPath;
+        } else {
+            key = content.localPath;
+        }
+        SharedPreferences sharedPreferences = ChatManager.Instance().getApplicationContext().getSharedPreferences("sticker", Context.MODE_PRIVATE);
+        sharedPreferences.edit()
+            .putString(key, content.remoteUrl)
+            .apply();
+
         if (mediaUploadedLiveData != null) {
             Map<String, String> map = new HashMap<>();
             map.put(((MediaMessageContent) message.content).localPath, remoteUrl);
@@ -501,7 +538,7 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
 
     @Override
     public void onMessageUpdate(Message message) {
-        postNewMessage(new UiMessage(message));
+        postMessageUpdate(new UiMessage(message));
     }
 
     @Override
@@ -522,6 +559,20 @@ public class MessageViewModel extends ViewModel implements OnReceiveMessageListe
     public void onMessageRead(List<ReadEntry> readEntries) {
         if (messageReadLiveData != null) {
             messageReadLiveData.postValue(readEntries);
+        }
+    }
+
+    @Override
+    public void onSecretMessageStartBurning(String targetId, long playedMsgId) {
+        if (messageStartBurnLiveData != null) {
+            messageStartBurnLiveData.postValue(new Pair<>(targetId, playedMsgId));
+        }
+    }
+
+    @Override
+    public void onSecretMessageBurned(List<Long> messageIds) {
+        if (messageBurnedLiveData != null) {
+            messageBurnedLiveData.postValue(messageIds);
         }
     }
 }

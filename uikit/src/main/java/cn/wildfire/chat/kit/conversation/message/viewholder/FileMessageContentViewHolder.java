@@ -4,8 +4,9 @@
 
 package cn.wildfire.chat.kit.conversation.message.viewholder;
 
-import android.content.ComponentName;
-import android.content.Intent;
+import android.content.Context;
+import android.os.Build;
+import android.os.Environment;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -20,8 +21,10 @@ import butterknife.OnClick;
 import cn.wildfire.chat.kit.R2;
 import cn.wildfire.chat.kit.annotation.EnableContextMenu;
 import cn.wildfire.chat.kit.annotation.MessageContentType;
+import cn.wildfire.chat.kit.annotation.MessageContextMenuItem;
 import cn.wildfire.chat.kit.conversation.ConversationFragment;
 import cn.wildfire.chat.kit.conversation.message.model.UiMessage;
+import cn.wildfire.chat.kit.utils.DownloadManager;
 import cn.wildfire.chat.kit.utils.FileUtils;
 import cn.wildfirechat.message.FileMessageContent;
 
@@ -50,26 +53,45 @@ public class FileMessageContentViewHolder extends MediaMessageContentViewHolder 
         fileIconImageView.setImageResource(FileUtils.getFileTypeImageResId(fileMessageContent.getName()));
     }
 
-    @OnClick(R2.id.imageView)
+    @OnClick(R2.id.fileMessageContentItemView)
     public void onClick(View view) {
         if (message.isDownloading) {
             return;
         }
-        File file = messageViewModel.mediaMessageContentFile(message.message);
-        if (file == null) {
+        FileUtils.openFile(fragment.getContext(), message.message);
+    }
+
+    @MessageContextMenuItem(tag = MessageContextMenuItemTags.TAG_SAVE_FILE, confirm = false, priority = 14)
+    public void saveFile(View itemView, UiMessage message) {
+        File file = DownloadManager.mediaMessageContentFile(message.message);
+        if (file == null || !file.exists()) {
+            Toast.makeText(fragment.getContext(), "请先点击下载文件", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        if (file.exists()) {
-            Intent intent = FileUtils.getViewIntent(fragment.getContext(), file);
-            ComponentName cn = intent.resolveActivity(fragment.getContext().getPackageManager());
-            if (cn == null) {
-                Toast.makeText(fragment.getContext(), "找不到能打开此文件的应用", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            fragment.startActivity(intent);
+        File dstFile = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            dstFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS) + "/" + file.getName());
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            dstFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS) + "/" + file.getName());
         } else {
-            messageViewModel.downloadMedia(message, file);
+            dstFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS) + "/" + file.getName());
+        }
+
+        boolean result = FileUtils.copyFile(file, dstFile);
+        if (result) {
+            Toast.makeText(fragment.getContext(), "文件保存成功", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(fragment.getContext(), "文件保存失败", Toast.LENGTH_SHORT).show();
         }
     }
+
+    @Override
+    public String contextMenuTitle(Context context, String tag) {
+        if (MessageContextMenuItemTags.TAG_SAVE_FILE.equals(tag)) {
+            return "存储到手机";
+        }
+        return super.contextMenuTitle(context, tag);
+    }
+
 }

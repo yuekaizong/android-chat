@@ -138,6 +138,15 @@ public class CallStartMessageContent extends MessageContent {
             objWrite.put("p", pin);
 
             payload.binaryContent = objWrite.toString().getBytes();
+
+            JSONObject pushDataWrite = new JSONObject();
+            pushDataWrite.put("callId", callId);
+            pushDataWrite.put("audioOnly", audioOnly);
+            if(targetIds != null && targetIds.size() > 0) {
+                pushDataWrite.put("participants", targetIds);
+            }
+            payload.pushData = pushDataWrite.toString();
+            payload.pushContent = "音视频通话邀请";
         } catch (JSONException e) {
             e.printStackTrace();
         }

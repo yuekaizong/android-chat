@@ -5,6 +5,7 @@
 package cn.wildfire.chat.kit.conversation;
 
 import android.util.Log;
+import android.util.Pair;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
@@ -14,17 +15,26 @@ import java.util.ArrayList;
 import java.util.List;
 
 import cn.wildfire.chat.kit.common.AppScopeViewModel;
+import cn.wildfire.chat.kit.common.OperateResult;
 import cn.wildfire.chat.kit.conversation.message.model.UiMessage;
 import cn.wildfirechat.message.Message;
+import cn.wildfirechat.model.BurnMessageInfo;
 import cn.wildfirechat.model.Conversation;
 import cn.wildfirechat.model.ConversationInfo;
 import cn.wildfirechat.remote.ChatManager;
+import cn.wildfirechat.remote.CreateSecretChatCallback;
 import cn.wildfirechat.remote.GeneralCallback;
 import cn.wildfirechat.remote.GetMessageCallback;
 import cn.wildfirechat.remote.GetRemoteMessageCallback;
+import cn.wildfirechat.remote.SecretChatStateChangeListener;
 
-public class ConversationViewModel extends ViewModel implements AppScopeViewModel {
+public class ConversationViewModel extends ViewModel implements AppScopeViewModel, SecretChatStateChangeListener {
     private MutableLiveData<Conversation> clearConversationMessageLiveData;
+    private MutableLiveData<Pair<String, ChatManager.SecretChatState>> secretConversationStateLiveData;
+
+    public ConversationViewModel() {
+        ChatManager.Instance().addSecretChatStateChangedListener(this);
+    }
 
     public MutableLiveData<Conversation> clearConversationMessageLiveData() {
         if (clearConversationMessageLiveData == null) {
@@ -33,13 +43,19 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
         return clearConversationMessageLiveData;
     }
 
-    public ConversationViewModel() {
+    public MutableLiveData<Pair<String, ChatManager.SecretChatState>> secretConversationStateLiveData() {
+        if (secretConversationStateLiveData == null) {
+            secretConversationStateLiveData = new MutableLiveData<>();
+        }
+        return secretConversationStateLiveData;
     }
 
     @Override
     protected void onCleared() {
+        ChatManager.Instance().removeSecretChatStateChangedListener(this);
     }
 
+    // 包含不存储类型消息
     public MutableLiveData<List<UiMessage>> loadOldMessages(Conversation conversation, String withUser, long fromMessageId, long fromMessageUid, int count) {
         MutableLiveData<List<UiMessage>> result = new MutableLiveData<>();
         ChatManager.Instance().getWorkHandler().post(() -> {
@@ -47,39 +63,46 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
                 @Override
                 public void onSuccess(List<Message> messageList, boolean hasMore) {
                     if (messageList != null && !messageList.isEmpty()) {
-                        List<UiMessage> messages = new ArrayList<>();
+                        List<UiMessage> uiMsgs = new ArrayList<>();
                         for (Message msg : messageList) {
-                            messages.add(new UiMessage(msg));
+                            if (conversation.type == Conversation.ConversationType.SecretChat) {
+                                BurnMessageInfo burnMessageInfo = ChatManager.Instance().getBurnMessageInfo(msg.messageId);
+                                uiMsgs.add(new UiMessage(msg, burnMessageInfo));
+                            } else {
+                                uiMsgs.add(new UiMessage(msg));
+                            }
                         }
-                        result.postValue(messages);
-                    } else {
+                        result.setValue(uiMsgs);
+                    } else if (conversation.type != Conversation.ConversationType.SecretChat) {
                         ChatManager.Instance().getRemoteMessages(conversation, null, fromMessageUid, count, new GetRemoteMessageCallback() {
                             @Override
                             public void onSuccess(List<Message> messages) {
                                 if (messages != null && !messages.isEmpty()) {
-                                    List<UiMessage> msgs = new ArrayList<>();
+                                    List<UiMessage> uiMsgs = new ArrayList<>();
                                     for (Message msg : messages) {
-                                        if(msg.messageId != 0) {
-                                            msgs.add(new UiMessage(msg));
-                                        }
+//                                        if (msg.messageId != 0) {
+                                        uiMsgs.add(new UiMessage(msg));
+//                                        }
                                     }
-                                    result.postValue(msgs);
+                                    result.postValue(uiMsgs);
                                 } else {
-                                    result.postValue(new ArrayList<UiMessage>());
+                                    result.postValue(new ArrayList<>());
                                 }
                             }
 
                             @Override
                             public void onFail(int errorCode) {
-                                result.postValue(new ArrayList<UiMessage>());
+                                result.postValue(new ArrayList<>());
                             }
                         });
+                    }else {
+                        result.postValue(new ArrayList<>());
                     }
                 }
 
                 @Override
                 public void onFail(int errorCode) {
-
+                    result.postValue(new ArrayList<>());
                 }
             });
         });
@@ -111,7 +134,12 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
             List<UiMessage> oldMessages = new ArrayList<>();
             if (oldMessageList != null) {
                 for (Message msg : oldMessageList) {
-                    oldMessages.add(new UiMessage(msg));
+                    if (conversation.type == Conversation.ConversationType.SecretChat) {
+                        BurnMessageInfo burnMessageInfo = ChatManager.Instance().getBurnMessageInfo(msg.messageId);
+                        oldMessages.add(new UiMessage(msg, burnMessageInfo));
+                    } else {
+                        oldMessages.add(new UiMessage(msg));
+                    }
                 }
             }
             Message message = ChatManager.Instance().getMessage(focusIndex);
@@ -119,7 +147,12 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
             List<UiMessage> newMessages = new ArrayList<>();
             if (newMessageList != null) {
                 for (Message msg : newMessageList) {
-                    newMessages.add(new UiMessage(msg));
+                    if (conversation.type == Conversation.ConversationType.SecretChat) {
+                        BurnMessageInfo burnMessageInfo = ChatManager.Instance().getBurnMessageInfo(msg.messageId);
+                        newMessages.add(new UiMessage(msg, burnMessageInfo));
+                    } else {
+                        newMessages.add(new UiMessage(msg));
+                    }
                 }
             }
 
@@ -138,17 +171,25 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
     public MutableLiveData<List<UiMessage>> loadNewMessages(Conversation conversation, String withUser, long startIndex, int count) {
         MutableLiveData<List<UiMessage>> result = new MutableLiveData<>();
         ChatManager.Instance().getWorkHandler().post(() -> {
+            List<UiMessage> uiMessages = new ArrayList<>();
             ChatManager.Instance().getMessages(conversation, startIndex, false, count, withUser, new GetMessageCallback() {
                 @Override
                 public void onSuccess(List<Message> messageList, boolean hasMore) {
-                    List<UiMessage> messages = new ArrayList<>();
+                    List<UiMessage> uiMsgs = new ArrayList<>();
                     if (messageList != null) {
                         for (Message msg : messageList) {
-                            messages.add(new UiMessage(msg));
+                            if (conversation.type == Conversation.ConversationType.SecretChat) {
+                                BurnMessageInfo burnMessageInfo = ChatManager.Instance().getBurnMessageInfo(msg.messageId);
+                                uiMsgs.add(new UiMessage(msg, burnMessageInfo));
+                            } else {
+                                uiMsgs.add(new UiMessage(msg));
+                            }
+                        }
+                        uiMessages.addAll(0, uiMsgs);
+                        if (!hasMore) {
+                            result.setValue(uiMessages);
                         }
                     }
-                    result.postValue(messages);
-
                 }
 
                 @Override
@@ -171,11 +212,11 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
         }
     }
 
-    public void clearRemoteConversationMessage(Conversation conversation){
+    public void clearRemoteConversationMessage(Conversation conversation) {
         ChatManager.Instance().clearRemoteConversationMessage(conversation, new GeneralCallback() {
             @Override
             public void onSuccess() {
-                if (clearConversationMessageLiveData != null){
+                if (clearConversationMessageLiveData != null) {
                     clearConversationMessageLiveData.setValue(conversation);
                 }
             }
@@ -204,4 +245,27 @@ public class ConversationViewModel extends ViewModel implements AppScopeViewMode
         ChatManager.Instance().setConversationSilent(conversation, silent);
     }
 
+    public MutableLiveData<OperateResult<Pair<String, Integer>>> createSecretChat(String userId) {
+        MutableLiveData<OperateResult<Pair<String, Integer>>> resultLiveData = new MutableLiveData<>();
+        ChatManager.Instance().createSecretChat(userId, new CreateSecretChatCallback() {
+            @Override
+            public void onSuccess(String target, int line) {
+                resultLiveData.postValue(new OperateResult<Pair<String, Integer>>(new Pair<>(target, line), 0));
+            }
+
+            @Override
+            public void onFail(int errorCode) {
+                resultLiveData.postValue(new OperateResult<Pair<String, Integer>>(null, errorCode));
+            }
+        });
+        return resultLiveData;
+    }
+
+    @Override
+    public void onSecretChatStateChanged(String targetId, ChatManager.SecretChatState state) {
+        Pair<String, ChatManager.SecretChatState> pair = new Pair<>(targetId, state);
+        if (secretConversationStateLiveData != null) {
+            secretConversationStateLiveData.postValue(pair);
+        }
+    }
 }

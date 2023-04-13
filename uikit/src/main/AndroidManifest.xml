@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <uses-feature android:name="android.hardware.camera" />
@@ -23,10 +24,6 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- 访问网络. 某些位置信息需要从网络服务器获取 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 访问WiFi状态. 需要WiFi信息用于网络定位 -->
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- 修改WiFi状态. 发起WiFi扫描, 需要WiFi信息用于网络定位 -->
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- 访问网络状态, 检测网络的可用性. 需要网络运营商相关信息用于网络定位 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 访问网络的变化, 需要某些信息用于网络定位 -->
@@ -42,6 +39,7 @@
 
     <application
         android:allowBackup="true"
+        android:hardwareAccelerated="true"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true"
@@ -73,6 +71,10 @@
             android:label="修改群名称"
             android:screenOrientation="portrait" />
         <activity
+            android:name="cn.wildfire.chat.kit.group.SetGroupRemarkActivity"
+            android:label="修改群备注"
+            android:screenOrientation="portrait" />
+        <activity
             android:name=".group.SetGroupAnnouncementActivity"
             android:label="修改群公告"
             android:screenOrientation="portrait" />
@@ -85,6 +87,7 @@
             android:theme="@style/AppTheme.FullScreen" />
         <activity
             android:name="cn.wildfire.chat.kit.voip.SingleCallActivity"
+            android:exported="false"
             android:launchMode="singleInstance"
             android:screenOrientation="portrait">
             <intent-filter>
@@ -140,10 +143,16 @@
             android:label="搜索中心" />
         <activity
             android:name="cn.wildfire.chat.kit.conversation.forward.ForwardActivity"
-            android:label="转发" />
+            android:label="选择一个聊天" />
         <activity
             android:name="cn.wildfire.chat.kit.conversation.pick.PickOrCreateConversationTargetActivity"
-            android:label="选取会话" />
+            android:label="选择联系人" />
+        <activity
+            android:name="cn.wildfire.chat.kit.conversation.pick.PickConversationActivity"
+            android:label="选择会话" />
+        <activity
+            android:name=".conversation.receipt.GroupMessageReceiptActivity"
+            android:label="消息阅读状态" />
         <activity
             android:name="cn.wildfire.chat.kit.channel.ChannelListActivity"
             android:label="频道列表" />
@@ -154,8 +163,12 @@
             android:theme="@style/AppTheme"
             android:windowSoftInputMode="adjustPan|stateHidden|adjustResize" />
 
-        <activity android:name="cn.wildfire.chat.kit.channel.ChannelInfoActivity" />
-        <activity android:name="cn.wildfire.chat.kit.WfcWebViewActivity">
+        <activity
+            android:name="cn.wildfire.chat.kit.channel.ChannelInfoActivity"
+            android:label="频道信息" />
+        <activity
+            android:name="cn.wildfire.chat.kit.WfcWebViewActivity"
+            android:exported="false">
             <intent-filter>
                 <action android:name="${packageName}.webview" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -188,21 +201,45 @@
             android:label="群成员权限" />
 
         <activity
-            android:name="cn.wildfire.chat.kit.voip.conference.CreateConferenceActivity"
-            android:label="发起会议" />
-        <activity
-            android:name="cn.wildfire.chat.kit.voip.conference.ConferenceActivity"
-            android:label="会议" />
-
-        <activity
             android:name="cn.wildfire.chat.kit.group.GroupMemberListActivity"
             android:label="群成员列表"
             android:screenOrientation="portrait" />
         <activity
             android:name="cn.wildfire.chat.kit.contact.pick.PickContactActivity"
             android:label="联系人选择" />
+
+        <activity
+            android:name="cn.wildfire.chat.kit.voip.conference.CreateConferenceActivity"
+            android:label="发起会议" />
+        <activity
+            android:name="cn.wildfire.chat.kit.voip.conference.ConferenceActivity"
+            android:excludeFromRecents="true"
+            android:label="会议"
+            android:launchMode="singleTask"
+            android:taskAffinity=".conference"
+            android:windowSoftInputMode="adjustPan" />
+
+        <activity
+            android:name=".voip.conference.ConferencePortalActivity"
+            android:label="会议" />
+        <activity
+            android:name=".voip.conference.OrderConferenceActivity"
+            android:label="预定会议" />
+        <activity
+            android:name=".voip.conference.ConferenceInfoActivity"
+            android:label="会议详情" />
+        <activity
+            android:name=".voip.conference.ConferenceInviteActivity"
+            android:label="会议邀请" />
+        <activity
+            android:name=".voip.conference.ConferenceParticipantListActivity"
+            android:label="参会人员" />
+        <activity
+            android:name=".voip.conference.ConferenceHistoryListActivity"
+            android:label="会议记录" />
         <activity
             android:name="cn.wildfire.chat.kit.voip.MultiCallActivity"
+            android:exported="false"
             android:launchMode="singleInstance"
             android:screenOrientation="portrait">
             <intent-filter>
@@ -220,22 +257,22 @@
             android:name=".conversation.file.FileRecordListActivity"
             android:label="文件记录" />
 
-        <activity
-            android:name=".conversation.bigfile.UploadBigFileActivity"
-            android:label="大文件上传" />
-
 
         <!--moment start-->
         <activity android:name="cn.wildfire.chat.moment.PublishFeedActivity" />
         <activity android:name="cn.wildfire.chat.moment.FeedMessageActivity" />
         <activity android:name="cn.wildfire.chat.moment.FeedDetailActivity" />
-        <activity android:name="cn.wildfire.chat.moment.FeedListActivity">
+        <activity
+            android:name="cn.wildfire.chat.moment.FeedListActivity"
+            android:exported="false">
             <intent-filter>
                 <action android:name="${packageName}.moment" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
         <activity android:name="cn.wildfire.chat.moment.FeedVisibleScopeActivity" />
+        <!--moment end-->
+
         <activity android:name=".group.manage.MuteGroupMemberActivity" />
         <activity
             android:name=".contact.ContactListActivity"
@@ -244,16 +281,26 @@
             android:name=".user.SetNameActivity"
             android:label="修改野火ID" />
         <activity
-            android:name=".voip.conference.ConferenceInviteActivity"
-            android:label="会议邀请" />
-        <activity
             android:name=".conversation.message.CompositeMessageContentActivity"
             android:label="组合消息" />
         <activity
             android:name=".favorite.FavoriteListActivity"
             android:label="收藏" />
-        <activity android:name=".voip.conference.ConferenceParticipantListActivity" />
-        <!--moment end-->
+        <activity
+            android:name=".group.GroupMemberMessageHistoryActivity"
+            android:label="用户消息" />
+        <activity
+            android:name=".widget.AlertDialogActivity"
+            android:theme="@style/AppThemeDialog" />
+        <activity
+            android:name=".organization.OrganizationMemberListActivity"
+            android:label="组织通讯录" />
+        <activity
+            android:name=".organization.EmployeeInfoActivity"
+            android:label="员工信息" />
+        <activity
+            android:name=".organization.pick.PickOrganizationMemberActivity"
+            android:label="选取组织成员" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

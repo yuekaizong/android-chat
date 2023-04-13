@@ -93,7 +93,7 @@ public class UserListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             }
             itemView.setOnClickListener(v -> {
                 if (onHeaderClickListener != null) {
-                    onHeaderClickListener.onHeaderClick(viewHolder.getAdapterPosition());
+                    onHeaderClickListener.onHeaderClick((HeaderViewHolder) viewHolder);
                 }
             });
             // contact
@@ -186,6 +186,9 @@ public class UserListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     }
 
     public void updateHeader(int index, HeaderValue value) {
+        if (headerValues == null){
+            return;
+        }
         HeaderValueWrapper wrapper = headerValues.get(index);
         headerValues.set(index, new HeaderValueWrapper(wrapper.headerViewHolderClazz, wrapper.layoutResId, value));
         notifyItemChanged(index);
@@ -227,7 +230,7 @@ public class UserListAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     }
 
     public interface OnHeaderClickListener {
-        void onHeaderClick(int index);
+        void onHeaderClick(HeaderViewHolder holder);
     }
 
     public interface OnFooterClickListener {

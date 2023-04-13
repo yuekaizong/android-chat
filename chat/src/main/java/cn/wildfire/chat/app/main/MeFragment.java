@@ -32,8 +32,8 @@ import java.util.List;
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
+import cn.wildfire.chat.app.setting.AccountActivity;
 import cn.wildfire.chat.app.setting.SettingActivity;
-import cn.wildfire.chat.kit.Config;
 import cn.wildfire.chat.kit.conversation.file.FileRecordListActivity;
 import cn.wildfire.chat.kit.favorite.FavoriteListActivity;
 import cn.wildfire.chat.kit.settings.MessageNotifySettingActivity;
@@ -141,6 +141,12 @@ public class MeFragment extends Fragment {
         startActivity(intent);
     }
 
+    @OnClick(R.id.accountOptionItemView)
+    void account() {
+        Intent intent = new Intent(getActivity(), AccountActivity.class);
+        startActivity(intent);
+    }
+
     @OnClick(R.id.fileRecordOptionItemView)
     void files() {
         Intent intent = new Intent(getActivity(), FileRecordListActivity.class);
@@ -150,7 +156,7 @@ public class MeFragment extends Fragment {
 
     @OnClick(R.id.themeOptionItemView)
     void theme() {
-        SharedPreferences sp = getActivity().getSharedPreferences(Config.SP_CONFIG_FILE_NAME, Context.MODE_PRIVATE);
+        SharedPreferences sp = getActivity().getSharedPreferences("wfc_kit_config", Context.MODE_PRIVATE);
         boolean darkTheme = sp.getBoolean("darkTheme", true);
         new MaterialDialog.Builder(getContext()).items(R.array.themes).itemsCallback(new MaterialDialog.ListCallback() {
             @Override
